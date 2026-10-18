@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace PadDeck.Core
 {
@@ -24,14 +25,16 @@ namespace PadDeck.Core
 
     /// <summary>
     /// Low-level keyboard hook for F19–F24, which the pad sends after it has been programmed.
-    /// Must be installed on a thread that pumps messages (the WPF UI thread).
+    /// It runs on its own thread that does nothing else: Windows silently removes a low-level hook that is slow to
+    /// answer even once, and every key on the system waits for it, so it must never share a thread with the UI.
+    /// <see cref="OnPadKey"/> is called on that thread and must return quickly.
     /// </summary>
     public sealed class KeyHook : IDisposable
     {
         public const int FirstVk = 0x82; // F19
         public const int LastVk = FirstVk + AppSettings.ButtonCount - 1; // F24
 
-        /// <summary>(button index, isDown, isFreshPress) → swallow the key?</summary>
+        /// <summary>(button index, isDown, isFreshPress) → swallow the key? Called on the hook thread.</summary>
         public Func<int, bool, bool, bool> OnPadKey;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -42,17 +45,40 @@ namespace PadDeck.Core
         [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
         [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wParam, IntPtr lParam);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] static extern int GetMessage(out MSG m, IntPtr h, uint min, uint max);
+        [DllImport("user32.dll")] static extern bool PostThreadMessage(uint thread, uint msg, IntPtr w, IntPtr l);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int x, y; }
 
         readonly HookProc proc; // held so the GC keeps the delegate alive
         readonly KeyGate gate = new KeyGate();
+        readonly Thread thread;
         IntPtr hook;
+        uint threadId;
 
         public KeyHook()
         {
             proc = Callback;
-            using var me = Process.GetCurrentProcess();
-            hook = SetWindowsHookEx(13, proc, GetModuleHandle(me.MainModule.ModuleName), 0);
-            if (hook == IntPtr.Zero) throw new InvalidOperationException("Could not install the keyboard hook (error " + Marshal.GetLastWin32Error() + ")");
+            using var ready = new ManualResetEventSlim();
+            int error = 0;
+            thread = new Thread(() =>
+            {
+                threadId = GetCurrentThreadId();
+                using (var me = Process.GetCurrentProcess())
+                    hook = SetWindowsHookEx(13, proc, GetModuleHandle(me.MainModule.ModuleName), 0);
+                if (hook == IntPtr.Zero) error = Marshal.GetLastWin32Error();
+                ready.Set();
+                if (hook == IntPtr.Zero) return;
+                // The hook is called from inside GetMessage; WM_QUIT from Dispose ends the loop.
+                while (GetMessage(out _, IntPtr.Zero, 0, 0) > 0) { }
+                UnhookWindowsHookEx(hook);
+                hook = IntPtr.Zero;
+            }) { IsBackground = true, Name = "PadDeck key hook", Priority = ThreadPriority.AboveNormal };
+            thread.Start();
+            ready.Wait();
+            if (hook == IntPtr.Zero) throw new InvalidOperationException("Could not install the keyboard hook (error " + error + ")");
         }
 
         IntPtr Callback(int code, IntPtr wParam, IntPtr lParam)
@@ -77,7 +103,9 @@ namespace PadDeck.Core
 
         public void Dispose()
         {
-            if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+            if (hook == IntPtr.Zero) return;
+            PostThreadMessage(threadId, 0x0012, IntPtr.Zero, IntPtr.Zero); // WM_QUIT
+            thread.Join(1000);
         }
     }
 }

@@ -12,12 +12,17 @@ namespace PadDeck.Core
 {
     public enum ObsCommand { SaveReplay, ToggleRecord, ToggleStream }
 
+    /// <summary>What OBS is doing right now.</summary>
+    public sealed record ObsState(bool Live, bool Recording, bool Replay);
+
     /// <summary>
     /// Talks to OBS's built-in obs-websocket (protocol v5). Port and password are read from OBS's own settings,
     /// so they never need copying into PadDeck.
     /// </summary>
     public static class Obs
     {
+        public const string Exe = @"C:\Program Files\obs-studio\bin\64bit\obs64.exe";
+
         static string ConfigPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "obs-studio", "plugin_config", "obs-websocket", "config.json");
 
         public static string Describe(ObsCommand c) => c switch
@@ -35,35 +40,79 @@ namespace PadDeck.Core
             return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret + challenge)));
         }
 
+        public static bool IsRunning()
+        {
+            var ps = System.Diagnostics.Process.GetProcessesByName("obs64");
+            foreach (var p in ps) p.Dispose();
+            return ps.Length > 0;
+        }
+
+        /// <summary>Starts OBS in the tray with the replay buffer on, so it doesn't pop up over a game.</summary>
+        public static void StartWithReplay() =>
+            Reset.Launch(new CoreApp { Name = "OBS Studio", Process = "obs64", Target = Exe, Args = "--startreplaybuffer --minimize-to-tray" });
+
         public static Outcome Run(ObsCommand cmd, string title)
         {
-            try { return RunAsync(cmd, title).GetAwaiter().GetResult(); }
+            if (cmd == ObsCommand.SaveReplay && !IsRunning())
+            {
+                try
+                {
+                    StartWithReplay();
+                    return new Outcome(Glyphs.Replay, "OBS was off", "Starting it with the replay buffer", Tone.Normal);
+                }
+                catch (Exception ex) { return new Outcome(Glyphs.Warning, title, "OBS is off and wouldn’t start: " + ex.Message, Tone.Error); }
+            }
+            try { return Task.Run(() => RunAsync(cmd, title)).GetAwaiter().GetResult(); }
             catch (Exception ex) { return new Outcome(Glyphs.Warning, title, ex.Message, Tone.Error); }
         }
 
-        /// <summary>Logs in and asks for the replay buffer state; changes nothing. For checking the connection.</summary>
-        public static string Ping()
+        /// <summary>Whether OBS is live, recording and buffering replays. Null when OBS isn't running or can't be reached.</summary>
+        public static ObsState State()
+        {
+            if (!IsRunning()) return null;
+            try
+            {
+                return Task.Run(async () =>
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    using var ws = await Open(cts.Token);
+                    var s = await Call(ws, "GetStreamStatus", cts.Token);
+                    var r = await Call(ws, "GetRecordStatus", cts.Token);
+                    var b = await Call(ws, "GetReplayBufferStatus", cts.Token);
+                    await Close(ws);
+                    return new ObsState(Active(s), Active(r), Active(b));
+                }).GetAwaiter().GetResult();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Stops the replay buffer, so closing OBS doesn't stop on its "outputs are active" exit prompt.</summary>
+        public static bool StopReplayBuffer()
         {
             try
             {
                 return Task.Run(async () =>
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
                     using var ws = await Open(cts.Token);
-                    await Send(ws, 6, new JsonObject { ["requestType"] = "GetReplayBufferStatus", ["requestId"] = "ping" }, cts.Token);
-                    while (true)
-                    {
-                        var m = await Receive(ws, cts.Token);
-                        if (m["op"]?.GetValue<int>() == 7) return "connected; replay buffer active: " + m["d"]?["responseData"]?["outputActive"];
-                    }
+                    var d = await Call(ws, "StopReplayBuffer", cts.Token);
+                    await Close(ws);
+                    return Ok(d);
                 }).GetAwaiter().GetResult();
             }
-            catch (Exception ex) { return "failed: " + ex.Message; }
+            catch { return false; }
+        }
+
+        /// <summary>Logs in and asks for the replay buffer state; changes nothing. For checking the connection.</summary>
+        public static string Ping()
+        {
+            var s = State();
+            return s == null ? "failed: OBS isn’t running or didn’t answer" : $"connected; live: {s.Live}, recording: {s.Recording}, replay buffer active: {s.Replay}";
         }
 
         static async Task<ClientWebSocket> Open(CancellationToken ct)
         {
-            if (System.Diagnostics.Process.GetProcessesByName("obs64").Length == 0) throw new InvalidOperationException("OBS isn’t running");
+            if (!IsRunning()) throw new InvalidOperationException("OBS isn’t running");
             var cfg = JsonNode.Parse(File.ReadAllText(ConfigPath));
             if (cfg?["server_enabled"]?.GetValue<bool>() != true) throw new InvalidOperationException("OBS’s WebSocket server is off (Tools → WebSocket Server Settings)");
             int port = cfg["server_port"]?.GetValue<int>() ?? 4455;
@@ -92,45 +141,93 @@ namespace PadDeck.Core
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             using var ws = await Open(cts.Token);
-
-            string request = cmd switch { ObsCommand.SaveReplay => "SaveReplayBuffer", ObsCommand.ToggleRecord => "ToggleRecord", _ => "ToggleStream" };
-            await Send(ws, 6, new JsonObject { ["requestType"] = request, ["requestId"] = "paddeck" }, cts.Token);
-
-            // Wait for our response, then (for replays) the ReplayBufferSaved event that carries the file name.
-            bool? ok = null;
-            string comment = null, file = null;
-            bool? active = null;
-            while (!cts.IsCancellationRequested)
+            try
             {
-                var m = await Receive(ws, cts.Token);
-                int op = m["op"]?.GetValue<int>() ?? -1;
-                var d = m["d"];
-                if (op == 7 && d?["requestId"]?.GetValue<string>() == "paddeck")
-                {
-                    ok = d["requestStatus"]?["result"]?.GetValue<bool>();
-                    int code = d["requestStatus"]?["code"]?.GetValue<int>() ?? 0;
-                    comment = code == 604 ? NotRunning(cmd) : d["requestStatus"]?["comment"]?.GetValue<string>();
-                    active = d["responseData"]?["outputActive"]?.GetValue<bool>();
-                    if (ok != true || cmd != ObsCommand.SaveReplay) break;
-                }
-                else if (op == 5 && d?["eventType"]?.GetValue<string>() == "ReplayBufferSaved")
-                {
-                    file = d["eventData"]?["savedReplayPath"]?.GetValue<string>();
-                    if (ok == true) break;
-                }
+                if (cmd == ObsCommand.SaveReplay) return await SaveReplay(ws, title, cts.Token);
+                var d = await Call(ws, cmd == ObsCommand.ToggleRecord ? "ToggleRecord" : "ToggleStream", cts.Token);
+                if (!Ok(d)) return Fail(title, d, "OBS said no");
+                bool active = Active(d);
+                return cmd == ObsCommand.ToggleRecord
+                    ? new Outcome(Glyphs.Record, active ? "Recording" : "Recording stopped", "OBS", active ? Tone.Off : Tone.Normal)
+                    : new Outcome(Glyphs.Stream, active ? "Live" : "Stream ended", "OBS", active ? Tone.Off : Tone.Normal);
             }
-            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch { }
-
-            if (ok != true) return new Outcome(Glyphs.Warning, title, comment ?? "OBS didn’t answer", Tone.Error);
-            return cmd switch
-            {
-                ObsCommand.SaveReplay => new Outcome(Glyphs.Replay, "Replay saved", file != null ? Path.GetFileName(file) : "Saving…", Tone.On),
-                ObsCommand.ToggleRecord => new Outcome(Glyphs.Record, active == true ? "Recording" : "Recording stopped", "OBS", active == true ? Tone.Off : Tone.Normal),
-                _ => new Outcome(Glyphs.Stream, active == true ? "Live" : "Stream ended", "OBS", active == true ? Tone.Off : Tone.Normal),
-            };
+            finally { await Close(ws); }
         }
 
-        static string NotRunning(ObsCommand c) => c == ObsCommand.SaveReplay ? "The replay buffer isn’t running" : "OBS isn’t doing that right now";
+        static async Task<Outcome> SaveReplay(ClientWebSocket ws, string title, CancellationToken ct)
+        {
+            // A replay buffer that's off (e.g. OBS was started without it) is turned on, so the next press saves.
+            if (!Active(await Call(ws, "GetReplayBufferStatus", ct)))
+            {
+                var start = await Call(ws, "StartReplayBuffer", ct);
+                if (!Ok(start)) return Fail(title, start, "The replay buffer is off and wouldn’t start");
+                return new Outcome(Glyphs.Replay, "Replay buffer was off", "Turned it on. Clips save from now on", Tone.Normal);
+            }
+
+            string file = null;
+            void OnEvent(JsonNode e)
+            {
+                if (e?["eventType"]?.GetValue<string>() == "ReplayBufferSaved") file = e["eventData"]?["savedReplayPath"]?.GetValue<string>();
+            }
+            var saved = await Call(ws, "SaveReplayBuffer", ct, OnEvent);
+            if (!Ok(saved)) return Fail(title, saved, "OBS couldn’t save the replay");
+
+            // OBS answers at once and announces the file once it's written. The save is already under way, so
+            // running out of time waiting for the file name isn't an error.
+            using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            try
+            {
+                while (file == null)
+                {
+                    var m = await Receive(ws, wait.Token);
+                    if (m["op"]?.GetValue<int>() == 5) OnEvent(m["d"]);
+                }
+            }
+            catch { }
+            if (file != null) AddCover(file);
+            return new Outcome(Glyphs.Replay, "Replay saved", file != null ? Path.GetFileName(file) : "Saving…", Tone.On);
+        }
+
+        /// <summary>ClipTrimmer gives a new replay its cover picture (the moment it was saved), which File
+        /// Explorer and ClipTrimmer's clip list show as the thumbnail. It runs without a window.</summary>
+        const string CoverTool = @"C:\claude-tools\ClipTrimmer\dist\ClipTrimmer\ClipTrimmer.exe";
+
+        static void AddCover(string file)
+        {
+            try
+            {
+                if (!File.Exists(CoverTool)) return;
+                var psi = new System.Diagnostics.ProcessStartInfo(CoverTool) { UseShellExecute = false, CreateNoWindow = true };
+                psi.ArgumentList.Add("--covers");
+                psi.ArgumentList.Add(Path.GetFullPath(file));
+                System.Diagnostics.Process.Start(psi)?.Dispose();
+            }
+            catch { }
+        }
+
+        /// <summary>Sends a request and returns its response, handing any events that arrive meanwhile to <paramref name="onEvent"/>.</summary>
+        static async Task<JsonNode> Call(ClientWebSocket ws, string type, CancellationToken ct, Action<JsonNode> onEvent = null)
+        {
+            await Send(ws, 6, new JsonObject { ["requestType"] = type, ["requestId"] = type }, ct);
+            while (true)
+            {
+                var m = await Receive(ws, ct);
+                int op = m["op"]?.GetValue<int>() ?? -1;
+                if (op == 7 && m["d"]?["requestId"]?.GetValue<string>() == type) return m["d"];
+                if (op == 5) onEvent?.Invoke(m["d"]);
+            }
+        }
+
+        static bool Ok(JsonNode d) => d?["requestStatus"]?["result"]?.GetValue<bool>() == true;
+        static bool Active(JsonNode d) => Ok(d) && d["responseData"]?["outputActive"]?.GetValue<bool>() == true;
+
+        static Outcome Fail(string title, JsonNode d, string fallback) =>
+            new Outcome(Glyphs.Warning, title, d?["requestStatus"]?["comment"]?.GetValue<string>() ?? fallback, Tone.Error);
+
+        static async Task Close(ClientWebSocket ws)
+        {
+            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch { }
+        }
 
         static async Task Send(ClientWebSocket ws, int op, JsonObject d, CancellationToken ct)
         {

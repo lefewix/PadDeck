@@ -65,8 +65,19 @@ namespace PadDeck
         /// <summary>Reset: stop the local LLM server and ComfyUI first (frees VRAM).</summary>
         public bool StopGpu { get; set; } = true;
         public Core.ObsCommand ObsAction { get; set; }
+        /// <summary>Open as an on/off switch: how to tell it's on, e.g. "llama-server" or "python in C:\claude-tools\ComfyUI".</summary>
+        public string RunningProcess { get; set; } = "";
+        /// <summary>Open as an on/off switch: what turns it off, e.g. its Stop.bat.</summary>
+        public string StopTarget { get; set; } = "";
+        /// <summary>Open: a GPU-heavy tool whose script closes OBS and the other GPU tools. It won't start while OBS is
+        /// live or recording, and a game starting while it's on gets a warning.</summary>
+        public bool GpuHeavy { get; set; }
+        /// <summary>Any button: what to open when the button is held instead of pressed, e.g. the clips folder.</summary>
+        public string HoldTarget { get; set; } = "";
 
         public bool IsSet => Kind != ActionKind.None;
+        [JsonIgnore] public bool IsToggle => Kind == ActionKind.Open && !string.IsNullOrWhiteSpace(RunningProcess) && !string.IsNullOrWhiteSpace(StopTarget);
+        [JsonIgnore] public bool HasHold => !string.IsNullOrWhiteSpace(HoldTarget);
     }
 
     public sealed class AppSettings
@@ -83,11 +94,16 @@ namespace PadDeck
         /// <summary>How long a popup stays on screen, in seconds.</summary>
         public double PopupSeconds { get; set; } = 3;
         public bool CloseToTray { get; set; } = true;
+        /// <summary>Warn when a fullscreen game starts while a GPU tool is on or the replay buffer is off.</summary>
+        public bool GameWarnings { get; set; } = true;
         public bool PadProgrammed { get; set; }
         public bool FirstRunDone { get; set; }
 
         static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PadDeck");
         static readonly string FilePath = Path.Combine(Dir, "settings.json");
+
+        /// <summary>Set when settings.json couldn't be read at startup; shown once in a popup.</summary>
+        public static string LoadProblem { get; private set; }
         internal static readonly JsonSerializerOptions Opts = new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -109,28 +125,59 @@ namespace PadDeck
 
         public static AppSettings Load()
         {
-            try
+            var s = LoadFrom(FilePath, out string problem);
+            if (problem != null) LoadProblem = problem;
+            return s;
+        }
+
+        public void Save() => SaveTo(FilePath);
+
+        static AppSettings Read(string file)
+        {
+            var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), Opts);
+            if (s == null) throw new InvalidDataException("empty settings");
+            s.Normalize();
+            return s;
+        }
+
+        /// <summary>
+        /// Reads the settings, falling back to the copy kept from the previous save. A damaged file is copied aside
+        /// first, so the next save can't overwrite the buttons with defaults and lose them.
+        /// </summary>
+        internal static AppSettings LoadFrom(string file, out string problem)
+        {
+            problem = null;
+            if (File.Exists(file))
             {
-                if (File.Exists(FilePath))
+                try { return Read(file); }
+                catch
                 {
-                    var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Opts);
-                    if (s != null) { s.Normalize(); return s; }
+                    string aside = Path.Combine(Path.GetDirectoryName(file), "settings.broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
+                    try { File.Copy(file, aside, true); } catch { }
+                    try
+                    {
+                        var b = Read(file + ".bak");
+                        problem = "Loaded the backup. The damaged file is " + Path.GetFileName(aside);
+                        return b;
+                    }
+                    catch { problem = "Started with defaults. The damaged file is " + Path.GetFileName(aside); }
                 }
             }
-            catch { }
             var d = new AppSettings();
             d.Normalize();
             return d;
         }
 
-        public void Save()
+        internal void SaveTo(string file)
         {
             try
             {
-                Directory.CreateDirectory(Dir);
-                string tmp = FilePath + ".tmp";
+                Directory.CreateDirectory(Path.GetDirectoryName(file));
+                string tmp = file + ".tmp";
                 File.WriteAllText(tmp, JsonSerializer.Serialize(this, Opts));
-                File.Move(tmp, FilePath, true);
+                // Replace keeps the previous file as .bak, which LoadFrom falls back to.
+                if (File.Exists(file)) File.Replace(tmp, file, file + ".bak");
+                else File.Move(tmp, file);
             }
             catch { }
         }

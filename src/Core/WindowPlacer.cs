@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace PadDeck.Core
 {
@@ -15,20 +14,20 @@ namespace PadDeck.Core
 
     /// <summary>
     /// Moves an app's main window to a fixed spot every time it opens (shown from the tray, launched, restored from hiding).
-    /// Uses a WinEvent hook, so it costs nothing while idle. Install on the UI thread.
+    /// Uses a WinEvent hook, so it costs nothing while idle. Install on a thread that pumps messages (the UI thread).
+    /// Windows are moved from the thread pool: moving another app's window waits for that app, and a hung app
+    /// shouldn't freeze PadDeck.
     /// </summary>
     public sealed class WindowPlacer : IDisposable
     {
         readonly Func<IReadOnlyList<WindowRule>> rules;
-        readonly Dispatcher ui;
         readonly WinEventProc proc;
         readonly Dictionary<IntPtr, DateTime> recent = new Dictionary<IntPtr, DateTime>();
         IntPtr hook;
 
-        public WindowPlacer(Func<IReadOnlyList<WindowRule>> rules, Dispatcher ui)
+        public WindowPlacer(Func<IReadOnlyList<WindowRule>> rules)
         {
             this.rules = rules;
-            this.ui = ui;
             proc = OnEvent;
             hook = SetWinEventHook(0x8002, 0x8002, IntPtr.Zero, proc, 0, 0, 0); // EVENT_OBJECT_SHOW, out of context
         }
@@ -49,8 +48,8 @@ namespace PadDeck.Core
 
         async Task PlaceLater(IntPtr hwnd, WindowRule rule, int ms)
         {
-            await Task.Delay(ms);
-            await ui.InvokeAsync(() => { if (IsWindowVisible(hwnd)) Place(hwnd, rule); });
+            await Task.Delay(ms).ConfigureAwait(false);
+            if (IsWindowVisible(hwnd)) Place(hwnd, rule);
         }
 
         WindowRule Match(IntPtr hwnd)

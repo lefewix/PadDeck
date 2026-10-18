@@ -14,7 +14,8 @@ namespace PadDeck.Core
         // Segoe Fluent Icons / MDL2 code points
         public const string Open = "", Keys = "", Text = "", Mic = "", MicOff = "",
             Speaker = "", Headphones = "", Volume = "", Mute = "", Warning = "", Empty = "",
-            Reset = "", Replay = "", Record = "", Stream = "";
+            Reset = "", Replay = "", Record = "", Stream = "",
+            Power = "", Folder = "";
 
         public static string ForDevice(string name, bool recording)
         {
@@ -137,6 +138,26 @@ namespace PadDeck.Core
             catch (Exception ex)
             {
                 return new Outcome(Glyphs.Warning, title.Length > 0 ? title : "PadDeck", ex.Message, Tone.Error);
+            }
+        }
+
+        /// <summary>Opens the button's hold target (e.g. the clips folder). Called off the UI thread. Never throws.</summary>
+        public static Outcome RunHold(ButtonConfig b)
+        {
+            string t = (b.HoldTarget ?? "").Trim().Trim('"');
+            string name = AutoLabel(new ButtonConfig { Kind = ActionKind.Open, Target = t });
+            try
+            {
+                string target = Environment.ExpandEnvironmentVariables(t);
+                if (Path.IsPathRooted(target) && !File.Exists(target) && !Directory.Exists(target)) throw new InvalidOperationException("Can’t find " + target);
+                Foreground.LaunchAndFocus(() => Process.Start(new ProcessStartInfo(target) { UseShellExecute = true })?.Dispose());
+                return Directory.Exists(target)
+                    ? new Outcome(Glyphs.Folder, "Opened " + name + " folder", target, Tone.Normal)
+                    : new Outcome(Glyphs.Open, "Opened " + name, target, Tone.Normal);
+            }
+            catch (Exception ex)
+            {
+                return new Outcome(Glyphs.Warning, "Couldn’t open " + name, ex.Message, Tone.Error);
             }
         }
 

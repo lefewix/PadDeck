@@ -41,6 +41,13 @@ namespace PadDeck.Ui
         CheckBox popupSw;
         int sel;
         bool quitting, recording;
+        /// <summary>IsVisible for the hook thread, which can't read WPF properties.</summary>
+        volatile bool shown;
+        readonly DispatcherTimer[] holdTimers = new DispatcherTimer[AppSettings.ButtonCount];
+        readonly HashSet<ButtonConfig> busy = new HashSet<ButtonConfig>();
+        DispatcherTimer watchTimer;
+        int lastGamePid;
+        bool watching;
 
         ButtonConfig Cur => cfg.Buttons[sel];
         static string KeyOf(int i) => "F" + (19 + i);
@@ -65,7 +72,7 @@ namespace PadDeck.Ui
             statusTimer.Tick += (s, e) => UpdateStatus();
 
             SourceInitialized += (s, e) => DarkTitleBar();
-            IsVisibleChanged += (s, e) => { if (IsVisible) { UpdateStatus(); statusTimer.Start(); } else statusTimer.Stop(); };
+            IsVisibleChanged += (s, e) => { shown = IsVisible; if (IsVisible) { UpdateStatus(); statusTimer.Start(); } else statusTimer.Stop(); };
             Closing += OnClosing;
             if (preview) { SetStatus("Pad connected", Theme.Accent); return; }
 
@@ -77,10 +84,15 @@ namespace PadDeck.Ui
             }
             popup = new PopupWindow();
             hook = new KeyHook { OnPadKey = OnPadKey };
-            placer = new WindowPlacer(() => cfg.Windows, Dispatcher);
+            placer = new WindowPlacer(() => cfg.Windows);
+            watchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            watchTimer.Tick += (s, e) => WatchTick();
+            watchTimer.Start();
             SetupTray();
             UpdateStatus();
             if (!startHidden) Show();
+            if (AppSettings.LoadProblem != null)
+                popup.ShowOutcome(new Outcome(Glyphs.Warning, "PadDeck’s settings were damaged", AppSettings.LoadProblem, Tone.Error), cfg, true, 10000);
         }
 
         /// <summary>Lays the window out offscreen with sample settings and saves it as a PNG.</summary>
@@ -271,7 +283,7 @@ namespace PadDeck.Ui
             };
             addRow.Children.Add(add);
             var apply = new Button { Content = "Apply now", Margin = new Thickness(8, 0, 0, 0), ToolTip = "Move the open windows into place right away" };
-            apply.Click += (s, e) => placer?.ApplyAll();
+            apply.Click += (s, e) => { if (placer != null) Task.Run(placer.ApplyAll); };
             addRow.Children.Add(apply);
             sp.Children.Add(addRow);
             return sp;
@@ -396,6 +408,7 @@ namespace PadDeck.Ui
             wrap.Children.Add(durBox);
             Sw("At top", cfg.PopupTop, "Show popups at the top of the screen instead of the bottom", v => cfg.PopupTop = v);
             Sw("Hide over fullscreen games", cfg.PopupSkipFullscreen, "Skip the popup when a fullscreen game or app is in front", v => cfg.PopupSkipFullscreen = v);
+            Sw("Game warnings", cfg.GameWarnings, "When a fullscreen game starts, warn if the local LLM or ComfyUI is still on or the replay buffer is off", v => cfg.GameWarnings = v);
 
             var screens = WF.Screen.AllScreens.Select((s, n) => new AudioDevice(s.DeviceName,
                 $"Display {n + 1} · {s.Bounds.Width}×{s.Bounds.Height}{(s.Primary ? " (main)" : "")}")).ToList();
@@ -489,6 +502,7 @@ namespace PadDeck.Ui
                 case ActionKind.Obs: ObsFields(fields, labelHint.hint); break;
             }
             sp.Children.Add(fields);
+            HoldField(sp);
 
             var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 18, 0, 0) };
             bool typed = b.Kind == ActionKind.Keys || b.Kind == ActionKind.Text;
@@ -553,6 +567,48 @@ namespace PadDeck.Ui
             args.TextChanged += (s, e) => { Cur.Args = args.Text; Changed(); };
             sp.Children.Add(args);
             sp.Children.Add(Note("You can drag a shortcut or file onto the box. Steam links like steam://rungameid/1172470 work too."));
+
+            sp.Children.Add(Caption("On/off switch (optional)", 14));
+            var running = new TextBox { Text = Cur.RunningProcess };
+            running.TextChanged += (s, e) => { Cur.RunningProcess = running.Text; MarkDirty(); };
+            sp.Children.Add(Hint(running, @"how to tell it’s on, e.g. llama-server or python in C:\claude-tools\ComfyUI").host);
+            var stop = PathRow(Cur.StopTarget, "what turns it off, e.g. its Stop.bat", v => Cur.StopTarget = v, () =>
+            {
+                var d = new Microsoft.Win32.OpenFileDialog { Title = "Choose what turns it off", Filter = "Scripts and apps|*.bat;*.cmd;*.exe|All files|*.*" };
+                return d.ShowDialog(this) == true ? d.FileName : null;
+            });
+            stop.Margin = new Thickness(0, 6, 0, 0);
+            sp.Children.Add(stop);
+            var gpu = new CheckBox { Style = Theme.Switch, Content = "GPU-heavy (its script closes OBS)", IsChecked = Cur.GpuHeavy, Margin = new Thickness(0, 10, 0, 0),
+                ToolTip = "Won’t start while OBS is live or recording, and you get a warning if a game starts while it’s on" };
+            gpu.Click += (s, e) => { Cur.GpuHeavy = gpu.IsChecked == true; MarkDirty(); };
+            sp.Children.Add(gpu);
+            sp.Children.Add(Note("When it’s on, a press asks you to press again, then runs the stop script. Leave both boxes empty to always just open."));
+        }
+
+        /// <summary>A text box for a path, with a Browse… button that fills it in.</summary>
+        DockPanel PathRow(string value, string hint, Action<string> set, Func<string> browse)
+        {
+            var row = new DockPanel();
+            var btn = new Button { Content = "Browse…", Margin = new Thickness(8, 0, 0, 0) };
+            DockPanel.SetDock(btn, Dock.Right);
+            row.Children.Add(btn);
+            var tb = new TextBox { Text = value };
+            row.Children.Add(Hint(tb, hint).host);
+            tb.TextChanged += (s, e) => { set(tb.Text); MarkDirty(); };
+            btn.Click += (s, e) => { if (browse() is string picked) tb.Text = picked; };
+            return row;
+        }
+
+        void HoldField(StackPanel sp)
+        {
+            sp.Children.Add(Caption("When held (optional)", 14));
+            sp.Children.Add(PathRow(Cur.HoldTarget, @"a folder or file, e.g. %USERPROFILE%\Videos\OBS", v => Cur.HoldTarget = v, () =>
+            {
+                var d = new Microsoft.Win32.OpenFolderDialog { Title = "Choose what holding this button opens" };
+                return d.ShowDialog(this) == true ? d.FolderName : null;
+            }));
+            sp.Children.Add(Note("Hold the button for about half a second to open this instead. With it set, a normal press acts when you let go."));
         }
 
         void KeysFields(StackPanel sp, TextBlock labelHint)
@@ -806,7 +862,7 @@ namespace PadDeck.Ui
                 row.Children.Add(rb);
             }
             sp.Children.Add(row);
-            sp.Children.Add(Note("Talks to OBS directly over its built-in WebSocket server, so no keys are sent to your game. The popup shows the saved file, or tells you if the replay buffer is off. Uses the port and password from OBS’s own settings."));
+            sp.Children.Add(Note("Talks to OBS directly over its built-in WebSocket server, so no keys are sent to your game. The popup shows the saved file. If the replay buffer is off, a press turns it on (and starts OBS in the tray if it’s closed). Uses the port and password from OBS’s own settings."));
         }
 
         void ResetFields(StackPanel sp)
@@ -933,28 +989,116 @@ namespace PadDeck.Ui
         ButtonConfig armed;
         DateTime armedAt;
 
-        /// <summary>Runs a button's action and shows the result. Reset needs a second press within 3 s.</summary>
-        async void Fire(ButtonConfig b)
+        /// <summary>True on the second press within 3 s; the first press only arms it.</summary>
+        bool Confirmed(ButtonConfig b)
         {
-            bool reset = b.Kind == ActionKind.Reset;
-            if (reset)
-            {
-                if (!ReferenceEquals(armed, b) || DateTime.UtcNow - armedAt > TimeSpan.FromSeconds(3))
-                {
-                    armed = b;
-                    armedAt = DateTime.UtcNow;
-                    var plan = await Task.Run(() => Reset.MakePlan(b));
-                    ShowResult(b, new Outcome(Glyphs.Reset, "Press again to reset", Reset.Describe(plan), Tone.Normal), true, 3000);
-                    return;
-                }
-                armed = null;
-                ShowResult(b, new Outcome(Glyphs.Reset, "Resetting…", "Closing apps", Tone.Normal), true, 15000);
-            }
-            var o = await Task.Run(() => ActionRunner.Run(b));
-            if (o != null) ShowResult(b, o, reset, reset ? Math.Max(5000, (int)(cfg.PopupSeconds * 1000)) : null);
+            if (ReferenceEquals(armed, b) && DateTime.UtcNow - armedAt <= TimeSpan.FromSeconds(3)) { armed = null; return true; }
+            armed = b;
+            armedAt = DateTime.UtcNow;
+            return false;
         }
 
-        void ShowResult(ButtonConfig b, Outcome o, bool force, int? holdMs)
+        /// <summary>
+        /// Runs a button's action and shows the result. Reset, and an on/off switch that's on, need a second press
+        /// within 3 s. Once an action runs, more presses of that button are ignored until it's done.
+        /// </summary>
+        async void Fire(ButtonConfig b)
+        {
+            string title = ActionRunner.Title(b);
+            if (busy.Contains(b))
+            {
+                ShowResult(b, new Outcome(Glyphs.For(b.Kind), title, "Still working on the last press", Tone.Normal), false, null);
+                return;
+            }
+            // Confirmation first. It only looks, so it doesn't count as busy and the second press can come in meanwhile.
+            bool stopping = false;
+            if (b.Kind == ActionKind.Reset)
+            {
+                if (!Confirmed(b))
+                {
+                    var plan = await Task.Run(() => Reset.MakePlan(b));
+                    if (ReferenceEquals(armed, b)) // not confirmed while the plan was being made
+                        ShowResult(b, new Outcome(Glyphs.Reset, "Press again to reset", Reset.Describe(plan), Tone.Normal), true, 3000);
+                    return;
+                }
+            }
+            else if (b.IsToggle && Toggle.IsOn(b.RunningProcess))
+            {
+                if (!Confirmed(b))
+                {
+                    ShowResult(b, new Outcome(Glyphs.Power, title + " is on", "Press again to turn it off", Tone.Normal), true, 3000);
+                    return;
+                }
+                stopping = true;
+            }
+            else armed = null;
+
+            busy.Add(b);
+            try { await Execute(b, title, stopping); }
+            finally { busy.Remove(b); }
+        }
+
+        async Task Execute(ButtonConfig b, string title, bool stopping)
+        {
+            int keep = Math.Max(5000, (int)(cfg.PopupSeconds * 1000));
+            if (b.Kind == ActionKind.Reset)
+            {
+                ShowResult(b, new Outcome(Glyphs.Reset, "Resetting…", "Closing apps", Tone.Normal), true, 15000);
+                ShowResult(b, await Task.Run(() => ActionRunner.Run(b)), true, keep);
+                return;
+            }
+            if (stopping)
+            {
+                ShowResult(b, new Outcome(Glyphs.Power, "Turning off " + title + "…", "", Tone.Normal), true, 30000);
+                ShowResult(b, await Task.Run(() => Toggle.Stop(b)), true, keep);
+                return;
+            }
+            if (b.IsToggle && b.GpuHeavy)
+            {
+                // Its script closes OBS, which would end a stream or cut a recording.
+                string obsBusy = await Task.Run(() => Reset.ObsBusy(Obs.State()));
+                if (obsBusy != null)
+                {
+                    ShowResult(b, new Outcome(Glyphs.Warning, "OBS is " + obsBusy, $"Starting {title} would close OBS. Stop {(obsBusy == "live" ? "the stream" : "recording")} first", Tone.Error), true, keep);
+                    return;
+                }
+                // Its script also turns off the other GPU tool; say so.
+                var others = cfg.Buttons.Where(x => !ReferenceEquals(x, b) && x.IsToggle && x.GpuHeavy).ToList();
+                var swapped = await Task.Run(() => others.Where(x => Toggle.IsOn(x.RunningProcess)).Select(ActionRunner.Title).ToList());
+                var started = await Task.Run(() => ActionRunner.Run(b));
+                if (started.Tone != Tone.Error && swapped.Count > 0) started = started with { Detail = "Turning off " + string.Join(" and ", swapped) + " first" };
+                ShowResult(b, started, false, null);
+                return;
+            }
+            var o = await Task.Run(() => ActionRunner.Run(b));
+            if (o != null) ShowResult(b, o, false, null);
+        }
+
+        async void FireHold(ButtonConfig b)
+        {
+            var o = await Task.Run(() => ActionRunner.RunHold(b));
+            ShowResult(b, o, false, null, ownIcon: false);
+        }
+
+        /// <summary>Every 3 s: when a fullscreen game comes to the front, warn once per game about GPU tools left on or no replay buffer.</summary>
+        async void WatchTick()
+        {
+            if (watching || !cfg.GameWarnings) return;
+            watching = true;
+            try
+            {
+                var game = await Task.Run(GameWatch.GameInFront);
+                if (game == null || game.Value.pid == lastGamePid) return;
+                lastGamePid = game.Value.pid;
+                var buttons = cfg.Buttons.ToList();
+                var lines = await Task.Run(() => GameWatch.Problems(buttons));
+                if (lines.Count > 0) popup?.ShowOutcome(new Outcome(Glyphs.Warning, "Heads up", string.Join("\n", lines), Tone.Error), cfg, true, 8000);
+            }
+            catch { }
+            finally { watching = false; }
+        }
+
+        void ShowResult(ButtonConfig b, Outcome o, bool force, int? holdMs, bool ownIcon = true)
         {
             if (ReferenceEquals(Cur, b) && testResult != null)
             {
@@ -962,20 +1106,23 @@ namespace PadDeck.Ui
                 testResult.Foreground = o.Tone == Tone.Error ? Theme.Amber : Theme.Muted;
             }
             // App launches and OBS actions show the button's own icon; states like "mic muted" keep their symbol.
-            string icon = o.Tone != Tone.Error && (b.Kind == ActionKind.Open || b.Kind == ActionKind.Obs) && !string.IsNullOrEmpty(b.Icon) ? b.Icon : null;
+            string icon = ownIcon && o.Tone != Tone.Error && (b.Kind == ActionKind.Open || b.Kind == ActionKind.Obs) && !string.IsNullOrEmpty(b.Icon) ? b.Icon : null;
             if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs, icon);
         }
 
         // ---------------- pad ----------------
 
-        /// <summary>Hook callback, on the UI thread. Returns true to swallow the key.</summary>
+        const int HoldMs = 600;
+
+        /// <summary>Hook callback, on the hook thread: hands the event to the UI thread and returns at once. True swallows the key.</summary>
         bool OnPadKey(int i, bool down, bool fresh)
         {
-            if (fresh) Dispatcher.BeginInvoke(new Action(() => OnPress(i)));
-            return cfg.Buttons[i].IsSet || IsVisible;
+            if (fresh) Dispatcher.BeginInvoke(new Action(() => OnDown(i)));
+            else if (!down) Dispatcher.BeginInvoke(new Action(() => OnUp(i)));
+            return cfg.Buttons[i].IsSet || shown;
         }
 
-        void OnPress(int i)
+        void OnDown(int i)
         {
             if (!cfg.PadProgrammed) { cfg.PadProgrammed = true; MarkDirty(); UpdateStatus(); }
             if (IsVisible)
@@ -984,7 +1131,26 @@ namespace PadDeck.Ui
                 if (sel != i && !recording) Select(i);
             }
             var b = cfg.Buttons[i];
-            if (b.IsSet) Fire(b);
+            if (!b.IsSet) return;
+            // With a hold action, wait: letting go early is a press, holding on is the hold action.
+            if (b.HasHold) HoldTimer(i).Start();
+            else Fire(b);
+        }
+
+        void OnUp(int i)
+        {
+            var t = holdTimers[i];
+            if (t == null || !t.IsEnabled) return;
+            t.Stop();
+            Fire(cfg.Buttons[i]);
+        }
+
+        DispatcherTimer HoldTimer(int i)
+        {
+            if (holdTimers[i] != null) return holdTimers[i];
+            var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoldMs) };
+            t.Tick += (s, e) => { t.Stop(); FireHold(cfg.Buttons[i]); };
+            return holdTimers[i] = t;
         }
 
         async void ProgramPad()
@@ -1065,6 +1231,7 @@ namespace PadDeck.Ui
             quitting = true;
             saveTimer.Stop();
             statusTimer.Stop();
+            watchTimer?.Stop();
             cfg.Save();
             hook?.Dispose();
             placer?.Dispose();

@@ -96,7 +96,7 @@ namespace PadDeck
             {
                 // Places the open windows per the saved rules, once, without starting the hook or UI.
                 var cfg = AppSettings.Load();
-                using var placer = new Core.WindowPlacer(() => cfg.Windows, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                using var placer = new Core.WindowPlacer(() => cfg.Windows);
                 int n = placer.ApplyAll();
                 if (args.Length >= 2) File.WriteAllText(args[1], $"placed {n} window(s)");
                 return 0;
@@ -130,9 +130,12 @@ namespace PadDeck
                 var w2 = new Ui.MainWindow(startHidden: true, preview: true);
                 w2.LoadSample(1);
                 w2.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-switch.png"), 1060, 640);
-                var w3 = new Ui.MainWindow(startHidden: true, preview: true); // the user's real settings
-                w3.SelectButton(0);
-                w3.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-real.png"), 1060, 640);
+                foreach (int real in new[] { 0, 1, 4 }) // the user's real settings: Reset, an on/off switch, a hold action
+                {
+                    var w3 = new Ui.MainWindow(startHidden: true, preview: true);
+                    w3.SelectButton(real);
+                    w3.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + (real == 0 ? "-real.png" : $"-real{real + 1}.png")), 1060, 900);
+                }
                 // Line icons next to Segoe symbols, at tile size and enlarged, to compare stroke weight and size.
                 var cmp = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
                 foreach (double sz in new[] { 30.0, 110.0 })
@@ -151,7 +154,11 @@ namespace PadDeck
                 pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off)));
                 pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Replay, "Replay saved", "Replay 2026-10-17 22-41-05.mp4", Tone.On), "line:obs"));
                 pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Open, "Claude", "Opened", Tone.Normal), "line:claude"));
-                Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pops, Width = 420, Height = 330 }, 420, 330,
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Warning, "Heads up", string.Join("\n",
+                    GameWatch.Lines(new System.Collections.Generic.List<(string, int)> { ("ComfyUI", 2) }, false, 4)), Tone.Error)));
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Power, "ComfyUI is on", "Press again to turn it off", Tone.Normal)));
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Folder, "Opened OBS", @"C:\Users\me\Videos\OBS", Tone.Normal)));
+                Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pops, Width = 420, Height = 640 }, 420, 640,
                     Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-popup.png"));
                 return 0;
             }
