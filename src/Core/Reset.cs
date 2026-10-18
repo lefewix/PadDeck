@@ -29,8 +29,9 @@ namespace PadDeck.Core
 
         public static List<CoreApp> DefaultCore() => new List<CoreApp>
         {
-            new CoreApp { Name = "OBS Studio", Process = "obs64", Target = @"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OBS Studio (replay buffer).lnk", Restart = true },
-            new CoreApp { Name = "Discord", Process = "Discord", Target = @"%LOCALAPPDATA%\Discord\Update.exe", Args = "--processStart Discord.exe", Restart = true },
+            // Not the Startup shortcut: it has --minimize-to-tray, and after a reset OBS should open on screen.
+            new CoreApp { Name = "OBS Studio", Process = "obs64", Target = @"C:\Program Files\obs-studio\bin\64bit\obs64.exe", Args = "--startreplaybuffer", Restart = true },
+            new CoreApp { Name = "Discord", Process = "Discord", Target = @"%LOCALAPPDATA%\Discord\Update.exe", Args = "--processStart Discord.exe" },
             new CoreApp { Name = "Fan Control", Process = "FanControl", Target = "schtasks.exe", Args = "/run /tn FanControl" },
             new CoreApp { Name = "Thorium", Process = "thorium", Target = @"C:\Program Files\Thorium\Application\thorium.exe" },
         };
@@ -42,6 +43,8 @@ namespace PadDeck.Core
             public List<AppWindow> Close = new List<AppWindow>();
             public List<CoreApp> Start = new List<CoreApp>();
             public List<CoreApp> Restart = new List<CoreApp>();
+            /// <summary>Core apps marked Restart that are left alone this time, with why: "OBS Studio (live)".</summary>
+            public List<string> Skip = new List<string>();
             public bool Llm, Comfy;
 
             /// <summary>Distinct app names, in window order.</summary>
@@ -62,7 +65,13 @@ namespace PadDeck.Core
             {
                 if (string.IsNullOrWhiteSpace(c.Target)) continue;
                 if (!Running(c.Process)) p.Start.Add(c);
-                else if (c.Restart) p.Restart.Add(c);
+                else if (c.Restart)
+                {
+                    // Restarting OBS would end a stream or cut a recording.
+                    string busy = IsObs(c) ? ObsBusy(Obs.State()) : null;
+                    if (busy != null) p.Skip.Add($"{c.Name} ({busy})");
+                    else p.Restart.Add(c);
+                }
             }
             if (b.StopGpu)
             {
@@ -79,11 +88,17 @@ namespace PadDeck.Core
             if (p.Llm || p.Comfy) parts.Add("stop " + string.Join(" and ", new[] { p.Llm ? "the LLM" : null, p.Comfy ? "ComfyUI" : null }.Where(s => s != null)));
             if (names.Count > 0) parts.Add("close " + List(names));
             if (p.Restart.Count > 0) parts.Add("restart " + List(p.Restart.Select(c => c.Name).ToList()));
+            if (p.Skip.Count > 0) parts.Add("leave " + List(p.Skip) + " running");
             if (p.Start.Count > 0) parts.Add("start " + List(p.Start.Select(c => c.Name).ToList()));
             if (parts.Count == 0) return "Nothing to do: only core apps are open";
             string s = string.Join(", ", parts);
             return char.ToUpper(s[0]) + s.Substring(1);
         }
+
+        static bool IsObs(CoreApp c) => c.Process.Trim().Equals("obs64", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Why OBS mustn't be restarted right now, or null when it's safe (or OBS can't be asked, e.g. hung).</summary>
+        public static string ObsBusy(ObsState s) => s == null ? null : s.Live ? "live" : s.Recording ? "recording" : null;
 
         static string List(List<string> names) => names.Count <= 3 ? string.Join(", ", names) : string.Join(", ", names.Take(3)) + $" +{names.Count - 3}";
 
@@ -95,7 +110,7 @@ namespace PadDeck.Core
 
             if (plan.Llm)
             {
-                foreach (var pr in Process.GetProcessesByName(LlmServer)) using (pr) { try { pr.Kill(); } catch { } }
+                foreach (var pr in Process.GetProcessesByName(LlmServer)) using (pr) { try { pr.Kill(); pr.WaitForExit(10000); } catch { } } // OBS needs the VRAM back
                 done.Add("stopped the LLM");
             }
             if (plan.Comfy && File.Exists(ComfyStop))
@@ -135,6 +150,7 @@ namespace PadDeck.Core
                 catch { failed.Add(c.Name); restarted.Remove(c.Name); }
             }
             if (restarted.Count > 0) done.Add("restarted " + string.Join(", ", restarted));
+            if (plan.Skip.Count > 0) done.Add("left " + string.Join(", ", plan.Skip) + " running");
             if (started.Count > 0) done.Add("started " + string.Join(", ", started));
             failed.AddRange(stuck.Select(n => n + " (wouldn’t close)"));
 
@@ -165,6 +181,8 @@ namespace PadDeck.Core
             var ids = new HashSet<int>();
             foreach (var p in Process.GetProcessesByName(c.Process)) using (p) ids.Add(p.Id);
             if (EndDirectly.Contains(c.Process)) { KillAll(c.Process); return; }
+            // With the replay buffer running, OBS asks "outputs are active, exit?" and would only go when ended after 10 s.
+            if (IsObs(c)) Obs.StopReplayBuffer();
             EnumWindows((h, l) =>
             {
                 GetWindowThreadProcessId(h, out int pid);
@@ -211,13 +229,13 @@ namespace PadDeck.Core
             Process.Start(psi)?.Dispose();
         }
 
-        static void RunHidden(string exe, string args, int timeoutMs)
+        internal static void RunHidden(string exe, string args, int timeoutMs)
         {
             using var p = Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true });
             p?.WaitForExit(timeoutMs);
         }
 
-        static bool Running(string name)
+        internal static bool Running(string name)
         {
             var ps = Process.GetProcessesByName((name ?? "").Trim());
             foreach (var p in ps) p.Dispose();

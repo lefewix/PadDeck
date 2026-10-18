@@ -27,6 +27,10 @@ namespace PadDeck.Tests
                 ResetTests();
                 WindowTests();
                 ObsTests();
+                SettingsFileTests();
+                ToggleTests();
+                GameWatchTests();
+                HookTests();
             }
             catch (Exception ex)
             {
@@ -176,19 +180,25 @@ namespace PadDeck.Tests
             Check("terminal (Claude Code) is never closed", !close.Any(x => x.Process == "WindowsTerminal"));
             var core = Reset.DefaultCore();
             Eq("default core apps", string.Join(",", core.Select(c => c.Process)), "obs64,Discord,FanControl,thorium");
-            Check("OBS starts via the replay-buffer shortcut", core[0].Target.EndsWith("OBS Studio (replay buffer).lnk"));
+            Check("OBS starts visible with the replay buffer", core[0].Target.EndsWith("obs64.exe") && core[0].Args == "--startreplaybuffer");
             Check("Fan Control starts via its elevated task", core[2].Target == "schtasks.exe" && core[2].Args.Contains("FanControl"));
             var p = new Reset.Plan { Llm = true, Close = close, Start = { core[0] } };
             Eq("plan description", Reset.Describe(p), "Stop the LLM, close notepad, Spotify, steamwebhelper, start OBS Studio");
             var r = new Reset.Plan { Restart = { core[0], core[1] } };
             Eq("restart description", Reset.Describe(r), "Restart OBS Studio, Discord");
-            Check("OBS and Discord restart by default, Fan Control and Thorium don't", core[0].Restart && core[1].Restart && !core[2].Restart && !core[3].Restart);
+            Check("only OBS restarts by default", core[0].Restart && !core[1].Restart && !core[2].Restart && !core[3].Restart);
             Eq("Fan Control restarts via its task", Reset.EndTaskArgs(core[2]), "/end /tn FanControl");
             Eq("non-task apps have no end-task command", Reset.EndTaskArgs(core[0]), null);
             Eq("empty plan", Reset.Describe(new Reset.Plan()), "Nothing to do: only core apps are open");
             var cfg = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Reset\"}]}", AppSettings.Opts);
             cfg.Normalize();
             Check("reset kind loads, GPU stop defaults on", cfg.Buttons[0].Kind == ActionKind.Reset && cfg.Buttons[0].StopGpu && cfg.Buttons[0].Core != null);
+            Eq("OBS live: not restarted", Reset.ObsBusy(new ObsState(true, false, true)), "live");
+            Eq("OBS recording: not restarted", Reset.ObsBusy(new ObsState(false, true, true)), "recording");
+            Eq("OBS only buffering: restart is fine", Reset.ObsBusy(new ObsState(false, false, true)), null);
+            Eq("OBS not answering (hung): restart is fine", Reset.ObsBusy(null), null);
+            Eq("skipped restart is described", Reset.Describe(new Reset.Plan { Close = close, Skip = { "OBS Studio (live)" } }),
+                "Close notepad, Spotify, steamwebhelper, leave OBS Studio (live) running");
         }
 
         static void WindowTests()
@@ -225,6 +235,81 @@ namespace PadDeck.Tests
             Check("unknown line logo is rejected", !PadDeck.Ui.Icons.IsLine("line:nope", out _) && !PadDeck.Ui.Icons.IsImage("line:claude"));
             Check("missing icon file is null, not a crash", PadDeck.Ui.Icons.Load(@"C:\nope\missing.png") == null);
             Eq("label for save replay", ActionRunner.AutoLabel(new ButtonConfig { Kind = ActionKind.Obs, ObsAction = ObsCommand.SaveReplay }), "Save replay");
+        }
+
+        static void SettingsFileTests()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "paddeck-selftest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string file = Path.Combine(dir, "settings.json");
+                var a = new AppSettings();
+                a.Normalize();
+                a.Buttons[0].Label = "first";
+                a.SaveTo(file);
+                a.Buttons[0].Label = "second";
+                a.SaveTo(file);
+                Check("save keeps the previous file as .bak", File.Exists(file + ".bak") && File.ReadAllText(file + ".bak").Contains("first"));
+                var ok = AppSettings.LoadFrom(file, out var p0);
+                Check("good file loads with no problem", ok.Buttons[0].Label == "second" && p0 == null);
+                File.WriteAllText(file, "{ \"Buttons\": [ { \"Lab");
+                var fromBak = AppSettings.LoadFrom(file, out var p1);
+                Check("damaged file falls back to the backup", fromBak.Buttons[0].Label == "first" && p1 != null && p1.StartsWith("Loaded the backup"), p1);
+                Check("damaged file is copied aside", Directory.GetFiles(dir, "settings.broken-*.json").Length == 1);
+                File.Delete(file + ".bak");
+                var none = AppSettings.LoadFrom(file, out var p2);
+                Check("no backup: defaults and a warning", none.Buttons.Count == AppSettings.ButtonCount && p2 != null && p2.StartsWith("Started with defaults"), p2);
+                var fresh = AppSettings.LoadFrom(Path.Combine(dir, "missing.json"), out var p3);
+                Check("first run (no file) is not a problem", fresh.Buttons.Count == AppSettings.ButtonCount && p3 == null);
+                var json = JsonSerializer.Serialize(new ButtonConfig { Kind = ActionKind.Open, RunningProcess = "x", StopTarget = "y" }, AppSettings.Opts);
+                Check("computed flags aren't saved", !json.Contains("IsToggle") && !json.Contains("HasHold"));
+                var old = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Open\",\"Target\":\"a.bat\"}]}", AppSettings.Opts);
+                old.Normalize();
+                Check("old settings load: not a switch, no hold, warnings on", !old.Buttons[0].IsToggle && !old.Buttons[0].HasHold && old.GameWarnings);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        static void ToggleTests()
+        {
+            Eq("switch spec: name only", Toggle.ParseSpec("llama-server").ToString(), "(llama-server, )");
+            Eq("switch spec: .exe dropped", Toggle.ParseSpec(" llama-server.exe ").name, "llama-server");
+            Eq("switch spec: name in folder", Toggle.ParseSpec(@"python in C:\claude-tools\ComfyUI\").ToString(), @"(python, C:\claude-tools\ComfyUI)");
+            Check("ComfyUI's python is in its folder", Toggle.InFolder(@"C:\claude-tools\ComfyUI\_app\python_embeded\python.exe", @"C:\claude-tools\ComfyUI"));
+            Check("other pythons aren't", !Toggle.InFolder(@"C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe", @"C:\claude-tools\ComfyUI"));
+            Check("a sibling folder with the same prefix isn't", !Toggle.InFolder(@"C:\claude-tools\ComfyUI-old\python.exe", @"C:\claude-tools\ComfyUI"));
+            Check("switch needs both boxes", new ButtonConfig { Kind = ActionKind.Open, RunningProcess = "x", StopTarget = "y" }.IsToggle
+                && !new ButtonConfig { Kind = ActionKind.Open, RunningProcess = "x" }.IsToggle
+                && !new ButtonConfig { Kind = ActionKind.Keys, RunningProcess = "x", StopTarget = "y" }.IsToggle);
+            Check("nothing running under a made-up name", !Toggle.IsOn("paddeck-no-such-process"));
+            var stop = Toggle.Stop(new ButtonConfig { Kind = ActionKind.Open, Label = "X", RunningProcess = "paddeck-no-such-process", StopTarget = @"C:\nope\Stop.bat" });
+            Check("missing stop script is an error, not a crash", stop.Tone == Tone.Error, stop.Detail);
+            var hold = ActionRunner.RunHold(new ButtonConfig { HoldTarget = @"C:\nope\missing folder" });
+            Check("missing hold target is an error, not a crash", hold.Tone == Tone.Error, hold.Detail);
+        }
+
+        static void GameWatchTests()
+        {
+            var mon = new PxRect { L = 0, T = 0, R = 2560, B = 1440 };
+            Check("borderless game is fullscreen", GameWatch.IsFullscreen(mon, mon, 0x16000000));
+            Check("exclusive-style bigger window counts", GameWatch.IsFullscreen(new PxRect { L = -1, T = -1, R = 2561, B = 1441 }, mon, 0));
+            Check("maximized app with a title bar isn't", !GameWatch.IsFullscreen(new PxRect { L = -8, T = -8, R = 2568, B = 1448 }, mon, 0x16CF0000));
+            Check("small borderless window isn't", !GameWatch.IsFullscreen(new PxRect { L = 0, T = 0, R = 1280, B = 720 }, mon, 0x16000000));
+            Check("games count", GameWatch.IsGame("r5apex_dx12") && GameWatch.IsGame("VALORANT-Win64-Shipping"));
+            Check("browser, player and shell don't", !GameWatch.IsGame("thorium") && !GameWatch.IsGame("PotPlayerMini64") && !GameWatch.IsGame("explorer") && !GameWatch.IsGame(""));
+            Eq("all fine: no warning", GameWatch.Lines(new List<(string, int)>(), true, 4).Count, 0);
+            Eq("OBS not answering: no nag", GameWatch.Lines(new List<(string, int)>(), null, 4).Count, 0);
+            Eq("no replay buffer", string.Join(" | ", GameWatch.Lines(new List<(string, int)>(), false, 4)), "Replay buffer is off · press F23 to turn it on");
+            Eq("ComfyUI on (it closed OBS)", string.Join(" | ", GameWatch.Lines(new List<(string, int)> { ("ComfyUI", 2) }, false, 4)),
+                "ComfyUI is on · press F21 to turn it off | Replay buffer is off");
+            Eq("no save-replay button", string.Join(" | ", GameWatch.Lines(new List<(string, int)>(), false, -1)), "Replay buffer is off");
+        }
+
+        static void HookTests()
+        {
+            using (var h = new KeyHook()) { }
+            Check("key hook installs on its own thread and unhooks", true);
         }
 
         static void CycleTests()
