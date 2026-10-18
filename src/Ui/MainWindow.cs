@@ -390,12 +390,17 @@ namespace PadDeck.Ui
                 return c;
             }
             popupSw = Sw("Popups", cfg.PopupOn, "Show what a button did, without taking focus", v => { cfg.PopupOn = v; if (trayPopups != null) trayPopups.Checked = v; });
+            var durations = new[] { 2, 3, 4, 5, 8 }.Select(n => new AudioDevice(n.ToString(), n + " s")).ToList();
+            var durBox = new ComboBox { Width = 72, Height = 30, ItemsSource = durations, Margin = new Thickness(-10, 4, 22, 4), ToolTip = "How long popups stay on screen" };
+            durBox.SelectedItem = durations.OrderBy(d => Math.Abs(int.Parse(d.Id) - cfg.PopupSeconds)).First();
+            durBox.SelectionChanged += (s, e) => { cfg.PopupSeconds = int.Parse(((AudioDevice)durBox.SelectedItem).Id); MarkDirty(); };
+            wrap.Children.Add(durBox);
             Sw("At top", cfg.PopupTop, "Show popups at the top of the screen instead of the bottom", v => cfg.PopupTop = v);
             Sw("Hide over fullscreen games", cfg.PopupSkipFullscreen, "Skip the popup when a fullscreen game or app is in front", v => cfg.PopupSkipFullscreen = v);
 
             var screens = WF.Screen.AllScreens.Select((s, n) => new AudioDevice(s.DeviceName,
                 $"Display {n + 1} · {s.Bounds.Width}×{s.Bounds.Height}{(s.Primary ? " (main)" : "")}")).ToList();
-            var screenBox = new ComboBox { Width = 230, Height = 30, ItemsSource = screens, Margin = new Thickness(0, 4, 22, 4), ToolTip = "Which monitor shows popups" };
+            var screenBox = new ComboBox { Width = 215, Height = 30, ItemsSource = screens, Margin = new Thickness(0, 4, 22, 4), ToolTip = "Which monitor shows popups" };
             screenBox.SelectedItem = screens.FirstOrDefault(s => s.Id == cfg.PopupScreen) ?? screens.FirstOrDefault(s => s.Name.EndsWith("(main)"));
             screenBox.SelectionChanged += (s, e) => { cfg.PopupScreen = (screenBox.SelectedItem as AudioDevice)?.Id; MarkDirty(); };
             wrap.Children.Add(screenBox);
@@ -854,10 +859,10 @@ namespace PadDeck.Ui
                 ShowResult(b, new Outcome(Glyphs.Reset, "Resetting…", "Closing apps", Tone.Normal), true, 15000);
             }
             var o = await Task.Run(() => ActionRunner.Run(b));
-            if (o != null) ShowResult(b, o, reset, reset ? 4000 : 1400);
+            if (o != null) ShowResult(b, o, reset, reset ? Math.Max(5000, (int)(cfg.PopupSeconds * 1000)) : null);
         }
 
-        void ShowResult(ButtonConfig b, Outcome o, bool force, int holdMs)
+        void ShowResult(ButtonConfig b, Outcome o, bool force, int? holdMs)
         {
             if (ReferenceEquals(Cur, b) && testResult != null)
             {

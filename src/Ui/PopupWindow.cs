@@ -82,23 +82,33 @@ namespace PadDeck.Ui
         }
 
         /// <param name="force">Show even over a fullscreen game (used for Reset's "press again" confirmation).</param>
-        public void ShowOutcome(Outcome o, AppSettings cfg, bool force = false, int holdMs = 1400)
+        /// <param name="holdMs">How long it stays fully visible; null = the user's popup duration.</param>
+        public void ShowOutcome(Outcome o, AppSettings cfg, bool force = false, int? holdMs = null)
         {
             if (!force && cfg.PopupSkipFullscreen && FullscreenAppInFront()) return;
+            bool wasVisible = IsVisible && Opacity > 0.5;
             host.Child = Build(o);
             hold.Stop();
-            hold.Interval = TimeSpan.FromMilliseconds(holdMs);
+            hold.Interval = TimeSpan.FromMilliseconds(holdMs ?? (int)(Math.Clamp(cfg.PopupSeconds, 0.5, 15) * 1000));
             BeginAnimation(OpacityProperty, null);
             if (!IsVisible) { Opacity = 0; Show(); }
             UpdateLayout();
             Place(cfg);
-            BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(90)));
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
+            // A short slide towards the screen edge's opposite side; skipped when it's just updating its text.
+            if (!wasVisible)
+            {
+                var slide = new TranslateTransform();
+                host.RenderTransform = slide;
+                slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(cfg.PopupTop ? -14 : 14, 0, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
+            }
             hold.Start();
         }
 
         void FadeOut()
         {
-            var a = new DoubleAnimation(0, TimeSpan.FromMilliseconds(260));
+            var a = new DoubleAnimation(0, TimeSpan.FromMilliseconds(450)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
             a.Completed += (s, e) => { if (!hold.IsEnabled) Hide(); };
             BeginAnimation(OpacityProperty, a);
         }

@@ -76,6 +76,8 @@ namespace PadDeck
         /// <summary>Screen device name (e.g. \\.\DISPLAY1); null = primary.</summary>
         public string PopupScreen { get; set; }
         public bool PopupSkipFullscreen { get; set; }
+        /// <summary>How long a popup stays on screen, in seconds.</summary>
+        public double PopupSeconds { get; set; } = 3;
         public bool CloseToTray { get; set; } = true;
         public bool PadProgrammed { get; set; }
         public bool FirstRunDone { get; set; }
