@@ -59,23 +59,90 @@ namespace PadDeck.Core
             return ids[(i + 1) % ids.Count];
         }
 
-        /// <summary>Makes the next device in the list the default output. Returns its name.</summary>
-        public static string CycleOutput(IList<string> ids)
+        /// <summary>The adapter part of an endpoint name without Windows' "2- " re-enumeration prefix:
+        /// "DC Headphones (2- FIIO KA13)" → "FIIO KA13".</summary>
+        public static string Adapter(string name)
         {
+            if (string.IsNullOrEmpty(name)) return "";
+            int open = name.IndexOf('('), close = name.LastIndexOf(')');
+            string a = open >= 0 && close > open ? name.Substring(open + 1, close - open - 1) : name;
+            return System.Text.RegularExpressions.Regex.Replace(a, @"^\d+-\s*", "").Trim();
+        }
+
+        /// <summary>
+        /// Maps remembered devices onto the connected ones, in order: by id, then by exact name, then by adapter
+        /// name when exactly one connected device has it. Devices that can't be found are skipped.
+        /// </summary>
+        public static List<AudioDevice> Resolve(IEnumerable<DeviceRef> refs, IList<AudioDevice> active)
+        {
+            var result = new List<AudioDevice>();
+            foreach (var r in refs)
+            {
+                var d = active.FirstOrDefault(a => a.Id == r.Id);
+                if (d == null)
+                {
+                    var byName = active.Where(a => string.Equals(a.Name, r.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (byName.Count == 1) d = byName[0];
+                }
+                if (d == null && !string.IsNullOrEmpty(r.Name))
+                {
+                    var byAdapter = active.Where(a => string.Equals(Adapter(a.Name), Adapter(r.Name), StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (byAdapter.Count == 1) d = byAdapter[0];
+                }
+                if (d != null && !result.Contains(d)) result.Add(d);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Makes the next device in the list the default (like SoundSwitch). Communications is only changed when asked,
+        /// so a call can stay on the headset. Returns the new device's name.
+        /// </summary>
+        public static string CycleDevice(IList<DeviceRef> refs, bool recording, bool comms)
+        {
+            var flow = recording ? DataFlow.Capture : DataFlow.Render;
             using var en = new MMDeviceEnumerator();
-            var active = en.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active).ToDictionary(d => d.ID, d => d.FriendlyName);
-            var usable = ids.Where(active.ContainsKey).ToList();
-            if (usable.Count == 0) throw new InvalidOperationException("None of the chosen output devices are connected");
+            var active = Devices(flow);
+            var usable = Resolve(refs, active);
+            if (usable.Count == 0) throw new InvalidOperationException("None of the chosen " + (recording ? "recording" : "playback") + " devices are connected");
             string cur = null;
-            try { cur = en.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID; } catch { }
-            string next = NextInCycle(usable, cur);
+            try { cur = en.GetDefaultAudioEndpoint(flow, Role.Multimedia).ID; } catch { }
+            var ids = usable.Select(d => d.Id).ToList();
+            string next = NextInCycle(ids, cur);
             var pc = (IPolicyConfig)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")));
             try
             {
-                for (int role = 0; role < 3; role++) Marshal.ThrowExceptionForHR(pc.SetDefaultEndpoint(next, role));
+                Marshal.ThrowExceptionForHR(pc.SetDefaultEndpoint(next, 0)); // console
+                Marshal.ThrowExceptionForHR(pc.SetDefaultEndpoint(next, 1)); // multimedia
+                if (comms) Marshal.ThrowExceptionForHR(pc.SetDefaultEndpoint(next, 2));
             }
             finally { Marshal.ReleaseComObject(pc); }
-            return active[next];
+            return usable.First(d => d.Id == next).Name;
+        }
+
+        /// <summary>The device list SoundSwitch cycles through, read from its settings file. Null if it isn't set up.</summary>
+        public static (List<DeviceRef> playback, List<DeviceRef> recording, bool comms)? SoundSwitchDevices()
+        {
+            try
+            {
+                string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SoundSwitch", "SoundSwitchConfiguration.json");
+                if (!System.IO.File.Exists(path)) return null;
+                using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(path));
+                var root = doc.RootElement;
+                var play = new List<DeviceRef>();
+                var rec = new List<DeviceRef>();
+                if (root.TryGetProperty("SelectedDevices", out var sel))
+                {
+                    foreach (var d in sel.EnumerateArray())
+                    {
+                        var r = new DeviceRef { Id = d.GetProperty("Id").GetString(), Name = d.GetProperty("Name").GetString() };
+                        (d.TryGetProperty("Type", out var t) && t.GetInt32() == 1 ? rec : play).Add(r);
+                    }
+                }
+                bool comms = root.TryGetProperty("ChangeCommunications", out var c) && c.GetBoolean();
+                return (play, rec, comms);
+            }
+            catch { return null; }
         }
 
         static string ProcName(uint pid)

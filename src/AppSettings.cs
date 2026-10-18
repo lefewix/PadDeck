@@ -9,6 +9,13 @@ namespace PadDeck
 {
     public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute }
 
+    /// <summary>A sound device remembered by id and name, so it can be found again if Windows gives it a new id.</summary>
+    public sealed class DeviceRef
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+    }
+
     public sealed class ButtonConfig
     {
         public string Label { get; set; } = "";
@@ -21,8 +28,12 @@ namespace PadDeck
         public string Text { get; set; } = "";
         /// <summary>MicMute: capture endpoint id, null = the default mic.</summary>
         public string DeviceId { get; set; }
-        /// <summary>OutputDevice: render endpoint ids to cycle through.</summary>
-        public List<string> DeviceIds { get; set; } = new List<string>();
+        /// <summary>OutputDevice (sound switch): devices to cycle through, in order.</summary>
+        public List<DeviceRef> Devices { get; set; } = new List<DeviceRef>();
+        /// <summary>OutputDevice: cycle recording devices instead of playback devices.</summary>
+        public bool Recording { get; set; }
+        /// <summary>OutputDevice: also change the communications default (what Discord calls use).</summary>
+        public bool SwitchComms { get; set; }
         /// <summary>AppMute: process name without .exe, e.g. "Discord".</summary>
         public string App { get; set; } = "";
 
@@ -56,7 +67,7 @@ namespace PadDeck
             Buttons ??= new List<ButtonConfig>();
             while (Buttons.Count < ButtonCount) Buttons.Add(new ButtonConfig());
             if (Buttons.Count > ButtonCount) Buttons.RemoveRange(ButtonCount, Buttons.Count - ButtonCount);
-            foreach (var b in Buttons) b.DeviceIds ??= new List<string>();
+            foreach (var b in Buttons) b.Devices ??= new List<DeviceRef>();
         }
 
         public static AppSettings Load()

@@ -44,6 +44,9 @@ namespace PadDeck
                 var w = new Ui.MainWindow(startHidden: true, preview: true);
                 w.LoadSample();
                 w.RenderSnapshot(args[1], 1060, 640);
+                var w2 = new Ui.MainWindow(startHidden: true, preview: true);
+                w2.LoadSample(1);
+                w2.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-switch.png"), 1060, 640);
                 var pop = Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off));
                 Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pop, Width = 420, Height = 120 }, 420, 120,
                     Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-popup.png"));

@@ -127,18 +127,18 @@ namespace PadDeck.Tests
             var s = new AppSettings();
             s.Normalize();
             Eq("six buttons", s.Buttons.Count, 6);
-            s.Buttons[1] = new ButtonConfig { Kind = ActionKind.OutputDevice, DeviceIds = new List<string> { "x", "y" } };
+            s.Buttons[1] = new ButtonConfig { Kind = ActionKind.OutputDevice, Devices = { new DeviceRef { Id = "x", Name = "X" }, new DeviceRef { Id = "y", Name = "Y" } } };
             s.Buttons[4] = new ButtonConfig { Kind = ActionKind.Keys, Keys = "Ctrl+Shift+M", Label = "Mute" };
             string json = JsonSerializer.Serialize(s, AppSettings.Opts);
             Check("kinds saved as names", json.Contains("\"OutputDevice\""));
             var r = JsonSerializer.Deserialize<AppSettings>(json, AppSettings.Opts);
             r.Normalize();
             Eq("round-trip keys", r.Buttons[4].Keys, "Ctrl+Shift+M");
-            Eq("round-trip devices", string.Join(",", r.Buttons[1].DeviceIds), "x,y");
+            Eq("round-trip devices", string.Join(",", r.Buttons[1].Devices.Select(d => d.Id + "=" + d.Name)), "x=X,y=Y");
             var old = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Open\"}]}", AppSettings.Opts);
             old.Normalize();
             Eq("short list padded to six", old.Buttons.Count, 6);
-            Check("missing device list filled", old.Buttons[0].DeviceIds != null);
+            Check("missing device list filled", old.Buttons[0].Devices != null);
         }
 
         static void LabelTests()
@@ -162,6 +162,27 @@ namespace PadDeck.Tests
             Eq("cycle wraps c→a", AudioCtl.NextInCycle(ids, "c"), "a");
             Eq("unknown current → first", AudioCtl.NextInCycle(ids, "zzz"), "a");
             Eq("empty list → null", AudioCtl.NextInCycle(new List<string>(), "a"), null);
+
+            // The real devices from this PC on 2026-10-17: SoundSwitch's saved list vs what's connected.
+            var active = new List<AudioDevice>
+            {
+                new AudioDevice("{realtek}", "Speakers (Realtek(R) Audio)"),
+                new AudioDevice("{ka13-new}", "DC Headphones (2- FIIO KA13)"),
+                new AudioDevice("{rt-digital}", "Realtek Digital Output (Realtek(R) Audio)"),
+            };
+            var saved = new List<DeviceRef>
+            {
+                new DeviceRef { Id = "{ka13-old}", Name = "Headphones (FIIO KA13)" },
+                new DeviceRef { Id = "{hda}", Name = "Speakers (High Definition Audio Device)" },
+                new DeviceRef { Id = "{realtek}", Name = "Speakers (Realtek(R) Audio)" },
+            };
+            Eq("adapter strips 2- prefix", AudioCtl.Adapter("DC Headphones (2- FIIO KA13)"), "FIIO KA13");
+            Eq("adapter keeps nested parens", AudioCtl.Adapter("Speakers (Realtek(R) Audio)"), "Realtek(R) Audio");
+            Eq("resolve: KA13 by adapter, HDA skipped, Realtek by id", string.Join(",", AudioCtl.Resolve(saved, active).Select(d => d.Id)), "{ka13-new},{realtek}");
+            Eq("resolve: ambiguous adapter is not guessed", AudioCtl.Resolve(new[] { new DeviceRef { Id = "?", Name = "Line Out (Realtek(R) Audio)" } }, active).Count, 0);
+            Eq("resolve: exact name beats adapter", AudioCtl.Resolve(new[] { new DeviceRef { Id = "?", Name = "Realtek Digital Output (Realtek(R) Audio)" } }, active).Single().Id, "{rt-digital}");
+            Eq("headphones glyph", Glyphs.ForDevice("DC Headphones (2- FIIO KA13)", false), Glyphs.Headphones);
+            Eq("speaker glyph", Glyphs.ForDevice("Speakers (Realtek(R) Audio)", false), Glyphs.Speaker);
         }
     }
 }

@@ -93,10 +93,10 @@ namespace PadDeck.Ui
         }
 
         /// <summary>Fills in example buttons for snapshots (not saved).</summary>
-        public void LoadSample()
+        public void LoadSample(int select = 3)
         {
             cfg.Buttons[0] = new ButtonConfig { Kind = ActionKind.MicMute };
-            cfg.Buttons[1] = new ButtonConfig { Kind = ActionKind.OutputDevice, Label = "KA13 / Speakers" };
+            cfg.Buttons[1] = new ButtonConfig { Kind = ActionKind.OutputDevice, Label = "KA13 / Speakers", Devices = { new DeviceRef { Id = "x", Name = "Headphones (FIIO KA13)" } } };
             cfg.Buttons[2] = new ButtonConfig { Kind = ActionKind.Open, Target = @"C:\Program Files\Discord\Discord.exe", Label = "Discord" };
             cfg.Buttons[3] = new ButtonConfig { Kind = ActionKind.Keys, Keys = "Ctrl+Shift+M", Label = "Discord mute" };
             cfg.Buttons[4] = new ButtonConfig { Kind = ActionKind.Text, Text = "gg wp\n" };
@@ -104,7 +104,7 @@ namespace PadDeck.Ui
             cfg.PadProgrammed = true;
             for (int i = 0; i < tiles.Length; i++) RefreshTile(i);
             UpdateStatus();
-            Select(3);
+            Select(select);
         }
 
         // ---------------- layout ----------------
@@ -500,23 +500,67 @@ namespace PadDeck.Ui
 
         void OutputFields(StackPanel sp)
         {
-            sp.Children.Add(Caption("Switch between"));
-            List<AudioDevice> devs;
-            try { devs = AudioCtl.Devices(DataFlow.Render); } catch { devs = new List<AudioDevice>(); }
-            if (preview && devs.Count == 0) devs = new List<AudioDevice> { new AudioDevice("a", "Speakers (FIIO KA13)"), new AudioDevice("b", "Headphones") };
-            foreach (var d in devs)
+            sp.Children.Add(Caption("Devices"));
+            var flow = new StackPanel { Orientation = Orientation.Horizontal };
+            foreach (bool rec in new[] { false, true })
             {
-                var c = new CheckBox { Style = Theme.Switch, Content = d.Name, IsChecked = Cur.DeviceIds.Contains(d.Id) || (preview && Cur.DeviceIds.Count == 0), Margin = new Thickness(0, 3, 0, 3) };
+                var rb = new RadioButton { Style = Theme.Seg, GroupName = "flow" + sel, Content = rec ? "Recording" : "Playback", IsChecked = Cur.Recording == rec };
+                rb.Checked += (s, e) => { if (Cur.Recording == rec) return; Cur.Recording = rec; Cur.Devices.Clear(); Changed(); editorHost.Child = Editor(); };
+                flow.Children.Add(rb);
+            }
+            var import = new Button { Content = "Copy from SoundSwitch", Margin = new Thickness(6, 0, 0, 0), ToolTip = "Use the same device list as SoundSwitch" };
+            var ss = AudioCtl.SoundSwitchDevices();
+            import.Visibility = ss == null ? Visibility.Collapsed : Visibility.Visible;
+            import.Click += (s, e) =>
+            {
+                Cur.Devices = (Cur.Recording ? ss.Value.recording : ss.Value.playback).ToList();
+                Cur.SwitchComms = ss.Value.comms;
+                Changed();
+                editorHost.Child = Editor();
+            };
+            flow.Children.Add(import);
+            sp.Children.Add(flow);
+
+            List<AudioDevice> active;
+            try { active = AudioCtl.Devices(Cur.Recording ? DataFlow.Capture : DataFlow.Render); } catch { active = new List<AudioDevice>(); }
+            if (preview && active.Count == 0) active = new List<AudioDevice> { new AudioDevice("a", "DC Headphones (2- FIIO KA13)"), new AudioDevice("b", "Speakers (Realtek(R) Audio)") };
+
+            // Chosen devices first, in cycle order (missing ones greyed out), then the other connected devices.
+            var rows = new List<(DeviceRef r, bool on, bool present)>();
+            foreach (var r in Cur.Devices)
+            {
+                var hit = AudioCtl.Resolve(new[] { r }, active).FirstOrDefault();
+                if (hit != null && rows.Any(x => x.r.Id == hit.Id)) continue;
+                rows.Add((hit != null ? new DeviceRef { Id = hit.Id, Name = hit.Name } : r, true, hit != null));
+            }
+            foreach (var a in active)
+                if (!rows.Any(x => x.r.Id == a.Id)) rows.Add((new DeviceRef { Id = a.Id, Name = a.Name }, false, true));
+
+            var boxes = new List<(CheckBox c, DeviceRef r)>();
+            var list = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            foreach (var row in rows)
+            {
+                var content = new TextBlock();
+                content.Inlines.Add(new Run(row.r.Name));
+                if (!row.present) content.Inlines.Add(new Run("  not connected") { Foreground = Theme.Muted, FontSize = 11.5 });
+                var c = new CheckBox { Style = Theme.Switch, Content = content, IsChecked = row.on, Margin = new Thickness(0, 3, 0, 3) };
                 c.Click += (s, e) =>
                 {
-                    Cur.DeviceIds.Remove(d.Id);
-                    // Keep the list in on-screen order so presses cycle predictably.
-                    if (c.IsChecked == true) Cur.DeviceIds.Insert(Math.Min(devs.TakeWhile(x => x.Id != d.Id).Count(x => Cur.DeviceIds.Contains(x.Id)), Cur.DeviceIds.Count), d.Id);
+                    Cur.Devices = boxes.Where(x => x.c.IsChecked == true).Select(x => x.r).ToList();
                     Changed();
                 };
-                sp.Children.Add(c);
+                boxes.Add((c, row.r));
+                list.Children.Add(c);
             }
-            sp.Children.Add(Note("Each press makes the next checked device the default output (for games, music and calls)."));
+            sp.Children.Add(list);
+
+            if (!Cur.Recording)
+            {
+                var comms = new CheckBox { Style = Theme.Switch, Content = "Also switch the communications device", IsChecked = Cur.SwitchComms, Margin = new Thickness(0, 10, 0, 0), ToolTip = "Off: Discord and other call apps keep using their device, like SoundSwitch’s default" };
+                comms.Click += (s, e) => { Cur.SwitchComms = comms.IsChecked == true; Changed(); };
+                sp.Children.Add(comms);
+            }
+            sp.Children.Add(Note("Each press makes the next switched-on device the default, skipping any that are unplugged. Devices that come back under a new name, like “2- FIIO KA13”, are still recognised."));
         }
 
         void AppFields(StackPanel sp, TextBlock labelHint)
@@ -543,6 +587,7 @@ namespace PadDeck.Ui
 
         void MarkDirty()
         {
+            if (preview) return;
             saveTimer?.Stop();
             saveTimer?.Start();
         }

@@ -13,7 +13,15 @@ namespace PadDeck.Core
     {
         // Segoe Fluent Icons / MDL2 code points
         public const string Open = "", Keys = "", Text = "", Mic = "", MicOff = "",
-            Speaker = "", Volume = "", Mute = "", Warning = "", Empty = "";
+            Speaker = "", Headphones = "", Volume = "", Mute = "", Warning = "", Empty = "";
+
+        public static string ForDevice(string name, bool recording)
+        {
+            if (recording) return Mic;
+            name ??= "";
+            return name.Contains("Headphone", StringComparison.OrdinalIgnoreCase) || name.Contains("Headset", StringComparison.OrdinalIgnoreCase)
+                ? Headphones : Speaker;
+        }
 
         public static string For(ActionKind k) => k switch
         {
@@ -36,7 +44,7 @@ namespace PadDeck.Core
             ActionKind.Keys => "Keys",
             ActionKind.Text => "Type text",
             ActionKind.MicMute => "Mic mute",
-            ActionKind.OutputDevice => "Output device",
+            ActionKind.OutputDevice => "Sound switch",
             ActionKind.AppMute => "App mute",
             _ => k.ToString(),
         };
@@ -100,9 +108,10 @@ namespace PadDeck.Core
                     }
                     case ActionKind.OutputDevice:
                     {
-                        if (b.DeviceIds.Count == 0) throw new InvalidOperationException("Pick the output devices to switch between");
-                        string name = AudioCtl.CycleOutput(b.DeviceIds);
-                        return new Outcome(Glyphs.Speaker, "Output", Short(name), Tone.Normal);
+                        if (b.Devices.Count == 0) throw new InvalidOperationException("Pick the devices to switch between");
+                        string name = AudioCtl.CycleDevice(b.Devices, b.Recording, b.SwitchComms);
+                        string detail = b.Recording ? "Default microphone" : b.SwitchComms ? "Default output and calls" : "Default output";
+                        return new Outcome(Glyphs.ForDevice(name, b.Recording), Short(name), detail, Tone.Normal);
                     }
                     case ActionKind.AppMute:
                     {
