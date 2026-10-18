@@ -7,7 +7,18 @@ using Microsoft.Win32;
 
 namespace PadDeck
 {
-    public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute }
+    public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute, Reset }
+
+    /// <summary>A Reset core app: kept open, and started with Target/Args when its process isn't running.</summary>
+    public sealed class CoreApp
+    {
+        public string Name { get; set; } = "";
+        /// <summary>Process name without .exe, e.g. "obs64".</summary>
+        public string Process { get; set; } = "";
+        /// <summary>What to run if it isn't running; empty = only keep it open.</summary>
+        public string Target { get; set; } = "";
+        public string Args { get; set; } = "";
+    }
 
     /// <summary>A sound device remembered by id and name, so it can be found again if Windows gives it a new id.</summary>
     public sealed class DeviceRef
@@ -36,6 +47,10 @@ namespace PadDeck
         public bool SwitchComms { get; set; }
         /// <summary>AppMute: process name without .exe, e.g. "Discord".</summary>
         public string App { get; set; } = "";
+        /// <summary>Reset: apps that stay open and get started if missing.</summary>
+        public List<CoreApp> Core { get; set; } = new List<CoreApp>();
+        /// <summary>Reset: stop the local LLM server and ComfyUI first (frees VRAM).</summary>
+        public bool StopGpu { get; set; } = true;
 
         public bool IsSet => Kind != ActionKind.None;
     }
@@ -67,7 +82,11 @@ namespace PadDeck
             Buttons ??= new List<ButtonConfig>();
             while (Buttons.Count < ButtonCount) Buttons.Add(new ButtonConfig());
             if (Buttons.Count > ButtonCount) Buttons.RemoveRange(ButtonCount, Buttons.Count - ButtonCount);
-            foreach (var b in Buttons) b.Devices ??= new List<DeviceRef>();
+            foreach (var b in Buttons)
+            {
+                b.Devices ??= new List<DeviceRef>();
+                b.Core ??= new List<CoreApp>();
+            }
         }
 
         public static AppSettings Load()

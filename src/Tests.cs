@@ -24,6 +24,7 @@ namespace PadDeck.Tests
                 SettingsTests();
                 LabelTests();
                 CycleTests();
+                ResetTests();
             }
             catch (Exception ex)
             {
@@ -153,6 +154,34 @@ namespace PadDeck.Tests
             Check("empty open reports an error", o.Tone == Tone.Error, o.Detail);
             var k = ActionRunner.Run(new ButtonConfig { Kind = ActionKind.Keys, Keys = "Ctrl+Nope" });
             Check("bad keys report an error", k.Tone == Tone.Error, k.Detail);
+        }
+
+        static void ResetTests()
+        {
+            var w = new List<Reset.AppWindow>
+            {
+                new Reset.AppWindow(new IntPtr(1), 1, "Discord", "Discord"),
+                new Reset.AppWindow(new IntPtr(2), 2, "thorium", "YouTube"),
+                new Reset.AppWindow(new IntPtr(3), 3, "WindowsTerminal", "Claude Code"),
+                new Reset.AppWindow(new IntPtr(4), 4, "explorer", "Downloads"),
+                new Reset.AppWindow(new IntPtr(5), 5, "notepad", "notes.txt"),
+                new Reset.AppWindow(new IntPtr(6), 6, "Spotify", "Spotify"),
+                new Reset.AppWindow(new IntPtr(7), 7, "PadDeck", "PadDeck"),
+                new Reset.AppWindow(new IntPtr(8), 8, "steamwebhelper", "Steam"),
+            };
+            var close = Reset.ToClose(w, Reset.DefaultCore());
+            Eq("reset closes only non-core windows", string.Join(",", close.Select(x => x.Process)), "notepad,Spotify,steamwebhelper");
+            Check("terminal (Claude Code) is never closed", !close.Any(x => x.Process == "WindowsTerminal"));
+            var core = Reset.DefaultCore();
+            Eq("default core apps", string.Join(",", core.Select(c => c.Process)), "obs64,Discord,FanControl,thorium");
+            Check("OBS starts via the replay-buffer shortcut", core[0].Target.EndsWith("OBS Studio (replay buffer).lnk"));
+            Check("Fan Control starts via its elevated task", core[2].Target == "schtasks.exe" && core[2].Args.Contains("FanControl"));
+            var p = new Reset.Plan { Llm = true, Close = close, Start = { core[0] } };
+            Eq("plan description", Reset.Describe(p), "Stop the LLM, close notepad, Spotify, steamwebhelper, start OBS Studio");
+            Eq("empty plan", Reset.Describe(new Reset.Plan()), "Nothing to do: only core apps are open");
+            var cfg = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Reset\"}]}", AppSettings.Opts);
+            cfg.Normalize();
+            Check("reset kind loads, GPU stop defaults on", cfg.Buttons[0].Kind == ActionKind.Reset && cfg.Buttons[0].StopGpu && cfg.Buttons[0].Core != null);
         }
 
         static void CycleTests()

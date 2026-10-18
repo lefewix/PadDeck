@@ -13,7 +13,8 @@ namespace PadDeck.Core
     {
         // Segoe Fluent Icons / MDL2 code points
         public const string Open = "", Keys = "", Text = "", Mic = "", MicOff = "",
-            Speaker = "", Headphones = "", Volume = "", Mute = "", Warning = "", Empty = "";
+            Speaker = "", Headphones = "", Volume = "", Mute = "", Warning = "", Empty = "",
+            Reset = "";
 
         public static string ForDevice(string name, bool recording)
         {
@@ -31,6 +32,7 @@ namespace PadDeck.Core
             ActionKind.MicMute => Mic,
             ActionKind.OutputDevice => Speaker,
             ActionKind.AppMute => Volume,
+            ActionKind.Reset => Reset,
             _ => Empty,
         };
     }
@@ -46,6 +48,7 @@ namespace PadDeck.Core
             ActionKind.MicMute => "Mic mute",
             ActionKind.OutputDevice => "Sound switch",
             ActionKind.AppMute => "App mute",
+            ActionKind.Reset => "Reset",
             _ => k.ToString(),
         };
 
@@ -64,6 +67,7 @@ namespace PadDeck.Core
                     var s = (b.Text ?? "").Replace("\r", "").Replace("\n", " ").Trim();
                     return s.Length == 0 ? "Type text" : s.Length > 18 ? s.Substring(0, 18) + "…" : s;
                 case ActionKind.AppMute: return string.IsNullOrWhiteSpace(b.App) ? "App mute" : "Mute " + b.App.Trim();
+                case ActionKind.Reset: return "Reset";
                 case ActionKind.None: return "";
                 default: return Describe(b.Kind);
             }
@@ -119,6 +123,8 @@ namespace PadDeck.Core
                         bool muted = AudioCtl.ToggleApp(b.App);
                         return new Outcome(muted ? Glyphs.Mute : Glyphs.Volume, b.App.Trim() + (muted ? " muted" : " unmuted"), title, muted ? Tone.Off : Tone.On);
                     }
+                    case ActionKind.Reset:
+                        return PadDeck.Core.Reset.Run(b);
                     default:
                         return null;
                 }

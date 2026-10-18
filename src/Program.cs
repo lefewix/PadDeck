@@ -37,6 +37,24 @@ namespace PadDeck
                 return err == null ? 0 : 1;
             }
 
+            if (args.Length >= 2 && args[0] == "--reset-plan")
+            {
+                // Read-only: lists the windows a Reset would close and what it would start. Closes nothing.
+                var b = new ButtonConfig { Kind = ActionKind.Reset, Core = Core.Reset.DefaultCore() };
+                var saved = AppSettings.Load().Buttons.Find(x => x.Kind == ActionKind.Reset);
+                if (saved != null) b = saved;
+                var plan = Core.Reset.MakePlan(b);
+                var lines = new System.Collections.Generic.List<string> { "All app windows:" };
+                foreach (var w in Core.Reset.Windows()) lines.Add($"  {w.Process,-22} {w.Title}");
+                lines.Add("Would close:");
+                foreach (var w in plan.Close) lines.Add($"  {w.Process,-22} {w.Title}");
+                lines.Add("Would start: " + string.Join(", ", plan.Start.ConvertAll(c => c.Name)));
+                lines.Add($"Stop LLM: {plan.Llm}, stop ComfyUI: {plan.Comfy}");
+                lines.Add("Popup text: " + Core.Reset.Describe(plan));
+                File.WriteAllLines(args[1], lines);
+                return 0;
+            }
+
             if (args.Length >= 2 && args[0] == "--snapshot")
             {
                 // Renders the UI (and a sample popup) to PNGs without ever showing a window.
@@ -47,6 +65,9 @@ namespace PadDeck
                 var w2 = new Ui.MainWindow(startHidden: true, preview: true);
                 w2.LoadSample(1);
                 w2.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-switch.png"), 1060, 640);
+                var w3 = new Ui.MainWindow(startHidden: true, preview: true); // the user's real settings
+                w3.SelectButton(0);
+                w3.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-real.png"), 1060, 640);
                 var pop = Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off));
                 Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pop, Width = 420, Height = 120 }, 420, 120,
                     Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-popup.png"));

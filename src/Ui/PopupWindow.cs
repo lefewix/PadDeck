@@ -81,11 +81,13 @@ namespace PadDeck.Ui
             };
         }
 
-        public void ShowOutcome(Outcome o, AppSettings cfg)
+        /// <param name="force">Show even over a fullscreen game (used for Reset's "press again" confirmation).</param>
+        public void ShowOutcome(Outcome o, AppSettings cfg, bool force = false, int holdMs = 1400)
         {
-            if (cfg.PopupSkipFullscreen && FullscreenAppInFront()) return;
+            if (!force && cfg.PopupSkipFullscreen && FullscreenAppInFront()) return;
             host.Child = Build(o);
             hold.Stop();
+            hold.Interval = TimeSpan.FromMilliseconds(holdMs);
             BeginAnimation(OpacityProperty, null);
             if (!IsVisible) { Opacity = 0; Show(); }
             UpdateLayout();

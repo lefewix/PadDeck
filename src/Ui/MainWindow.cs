@@ -92,6 +92,8 @@ namespace PadDeck.Ui
             Snapshot.Save(host, w, h, path);
         }
 
+        public void SelectButton(int i) { UpdateStatus(); Select(i); }
+
         /// <summary>Fills in example buttons for snapshots (not saved).</summary>
         public void LoadSample(int select = 3)
         {
@@ -331,7 +333,14 @@ namespace PadDeck.Ui
                 if (k != ActionKind.None) c.Children.Add(new TextBlock { Text = Glyphs.For(k), FontFamily = Theme.Icons, FontSize = 12, Margin = new Thickness(0, 1, 6, 0), VerticalAlignment = VerticalAlignment.Center });
                 c.Children.Add(new TextBlock { Text = ActionRunner.Describe(k) });
                 rb.Content = c;
-                rb.Checked += (s, e) => { if (Cur.Kind == k) return; Cur.Kind = k; Changed(); editorHost.Child = Editor(); };
+                rb.Checked += (s, e) =>
+                {
+                    if (Cur.Kind == k) return;
+                    Cur.Kind = k;
+                    if (k == ActionKind.Reset && Cur.Core.Count == 0) Cur.Core = Reset.DefaultCore();
+                    Changed();
+                    editorHost.Child = Editor();
+                };
                 kinds.Children.Add(rb);
             }
             sp.Children.Add(kinds);
@@ -357,12 +366,18 @@ namespace PadDeck.Ui
                 case ActionKind.MicMute: MicFields(fields); break;
                 case ActionKind.OutputDevice: OutputFields(fields); break;
                 case ActionKind.AppMute: AppFields(fields, labelHint.hint); break;
+                case ActionKind.Reset: ResetFields(fields); break;
             }
             sp.Children.Add(fields);
 
             var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 18, 0, 0) };
             bool typed = b.Kind == ActionKind.Keys || b.Kind == ActionKind.Text;
-            var test = new Button { Content = typed ? "Test in 3 s" : "Test", ToolTip = typed ? "Click, then switch to the window you want the keys to go to" : "Run this action now" };
+            var test = new Button
+            {
+                Content = typed ? "Test in 3 s" : b.Kind == ActionKind.Reset ? "Run reset" : "Test",
+                ToolTip = typed ? "Click, then switch to the window you want the keys to go to"
+                    : b.Kind == ActionKind.Reset ? "Click twice: the first click shows what will close" : "Run this action now",
+            };
             test.Click += (s, e) => Test(typed);
             testRow.Children.Add(test);
             testResult = new TextBlock { Foreground = Theme.Muted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), FontSize = 12 };
@@ -579,6 +594,92 @@ namespace PadDeck.Ui
             sp.Children.Add(Note("Mutes just that app’s sound in the Windows volume mixer. Press again to unmute. Pick from the list while the app is playing something."));
         }
 
+        void ResetFields(StackPanel sp)
+        {
+            sp.Children.Add(Caption("Core apps: kept open, and started if they aren’t running"));
+            var rows = new StackPanel();
+            foreach (var c in Cur.Core.ToList())
+            {
+                // Two lines per app: name and remove button, then the full-width start command.
+                var head = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
+                var del = new Button { Content = new TextBlock { Text = "", FontFamily = Theme.Icons, FontSize = 10 }, Padding = new Thickness(8, 5, 8, 5), ToolTip = "Remove from core apps" };
+                del.Click += (s, e) => { Cur.Core.Remove(c); Changed(); editorHost.Child = Editor(); };
+                DockPanel.SetDock(del, Dock.Right);
+                head.Children.Add(del);
+                var name = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+                name.Inlines.Add(new Run(c.Name) { FontWeight = FontWeights.SemiBold });
+                name.Inlines.Add(new Run("   " + c.Process) { FontFamily = Theme.Mono, FontSize = 10.5, Foreground = Theme.Muted });
+                head.Children.Add(name);
+
+                var g = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+                g.ColumnDefinitions.Add(new ColumnDefinition());
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+                var target = new TextBox { Text = c.Target, FontSize = 12, ToolTip = "What to run when it isn’t running. Leave empty to only keep it open." };
+                target.TextChanged += (s, e) => { c.Target = target.Text; MarkDirty(); };
+                var th = Hint(target, "nothing (only keep it open)").host;
+                th.Margin = new Thickness(0, 0, 6, 0);
+                g.Children.Add(th);
+                var args = new TextBox { Text = c.Args, FontSize = 12, ToolTip = "Arguments" };
+                args.TextChanged += (s, e) => { c.Args = args.Text; MarkDirty(); };
+                var ah = Hint(args, "arguments").host;
+                Grid.SetColumn(ah, 1);
+                g.Children.Add(ah);
+
+                rows.Children.Add(head);
+                rows.Children.Add(g);
+            }
+            sp.Children.Add(rows);
+
+            var addRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+            var add = new ComboBox { Width = 260, Height = 32, ToolTip = "Make an app that’s open right now a core app" };
+            add.Items.Add(new AudioDevice(null, "Add an open app…"));
+            add.SelectedIndex = 0;
+            add.DropDownOpened += (s, e) =>
+            {
+                var have = new HashSet<string>(Cur.Core.Select(x => x.Process), StringComparer.OrdinalIgnoreCase);
+                var apps = Reset.Windows().Select(w => w.Process).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(n => !Reset.AlwaysKeep.Contains(n) && !have.Contains(n)).OrderBy(n => n).ToList();
+                add.Items.Clear();
+                add.Items.Add(new AudioDevice(null, apps.Count == 0 ? "No other apps are open" : "Add an open app…"));
+                foreach (var n in apps) add.Items.Add(new AudioDevice(n, n));
+                add.SelectedIndex = 0;
+            };
+            add.SelectionChanged += (s, e) =>
+            {
+                if (add.SelectedItem is not AudioDevice { Id: not null } d) return;
+                string path = "", title = d.Name;
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName(d.Id))
+                {
+                    using (p)
+                    {
+                        try
+                        {
+                            path = p.MainModule.FileName;
+                            var desc = p.MainModule.FileVersionInfo.FileDescription;
+                            if (!string.IsNullOrWhiteSpace(desc)) title = desc.Trim();
+                            break;
+                        }
+                        catch { }
+                    }
+                }
+                Cur.Core.Add(new CoreApp { Name = title, Process = d.Id, Target = path });
+                Changed();
+                Dispatcher.BeginInvoke(new Action(() => editorHost.Child = Editor()));
+            };
+            addRow.Children.Add(add);
+            var defaults = new Button { Content = "Restore defaults", Margin = new Thickness(8, 0, 0, 0), ToolTip = "OBS, Discord, Fan Control and Thorium" };
+            defaults.Click += (s, e) => { Cur.Core = Reset.DefaultCore(); Changed(); editorHost.Child = Editor(); };
+            addRow.Children.Add(defaults);
+            sp.Children.Add(addRow);
+
+            var gpu = new CheckBox { Style = Theme.Switch, Content = "Stop the local LLM and ComfyUI first (frees the GPU)", IsChecked = Cur.StopGpu, Margin = new Thickness(0, 14, 0, 0) };
+            gpu.Click += (s, e) => { Cur.StopGpu = gpu.IsChecked == true; Changed(); };
+            sp.Children.Add(gpu);
+            sp.Children.Add(Note("Every other app with a window is asked to close, like clicking its X. Apps with unsaved work can still ask, and stay open. " +
+                "Apps that only live in the tray are left alone, and Windows Terminal, File Explorer and PadDeck are never closed. " +
+                "Press the button twice within 3 seconds: the first press shows what will close.", 10));
+        }
+
         void Changed()
         {
             RefreshTile(sel);
@@ -600,11 +701,41 @@ namespace PadDeck.Ui
                 for (int n = 3; n > 0; n--) { testResult.Text = $"Sending in {n}…"; await Task.Delay(1000); }
             }
             testResult.Text = "";
+            Fire(b);
+        }
+
+        ButtonConfig armed;
+        DateTime armedAt;
+
+        /// <summary>Runs a button's action and shows the result. Reset needs a second press within 3 s.</summary>
+        async void Fire(ButtonConfig b)
+        {
+            bool reset = b.Kind == ActionKind.Reset;
+            if (reset)
+            {
+                if (!ReferenceEquals(armed, b) || DateTime.UtcNow - armedAt > TimeSpan.FromSeconds(3))
+                {
+                    armed = b;
+                    armedAt = DateTime.UtcNow;
+                    var plan = await Task.Run(() => Reset.MakePlan(b));
+                    ShowResult(b, new Outcome(Glyphs.Reset, "Press again to reset", Reset.Describe(plan), Tone.Normal), true, 3000);
+                    return;
+                }
+                armed = null;
+                ShowResult(b, new Outcome(Glyphs.Reset, "Resetting…", "Closing apps", Tone.Normal), true, 15000);
+            }
             var o = await Task.Run(() => ActionRunner.Run(b));
-            if (o == null) return;
-            testResult.Text = o.Title + (string.IsNullOrEmpty(o.Detail) ? "" : " · " + o.Detail);
-            testResult.Foreground = o.Tone == Tone.Error ? Theme.Amber : Theme.Muted;
-            if (cfg.PopupOn) popup?.ShowOutcome(o, cfg);
+            if (o != null) ShowResult(b, o, reset, reset ? 4000 : 1400);
+        }
+
+        void ShowResult(ButtonConfig b, Outcome o, bool force, int holdMs)
+        {
+            if (ReferenceEquals(Cur, b) && testResult != null)
+            {
+                testResult.Text = o.Title + (string.IsNullOrEmpty(o.Detail) ? "" : " · " + o.Detail);
+                testResult.Foreground = o.Tone == Tone.Error ? Theme.Amber : Theme.Muted;
+            }
+            if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs);
         }
 
         // ---------------- pad ----------------
@@ -625,11 +756,7 @@ namespace PadDeck.Ui
                 if (sel != i && !recording) Select(i);
             }
             var b = cfg.Buttons[i];
-            if (!b.IsSet) return;
-            Task.Run(() => ActionRunner.Run(b)).ContinueWith(t => Dispatcher.InvokeAsync(() =>
-            {
-                if (t.Result != null && cfg.PopupOn) popup.ShowOutcome(t.Result, cfg);
-            }));
+            if (b.IsSet) Fire(b);
         }
 
         async void ProgramPad()
