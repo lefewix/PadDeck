@@ -31,6 +31,8 @@ namespace PadDeck.Ui
 
         PopupWindow popup;
         KeyHook hook;
+        WindowPlacer placer;
+        StackPanel windowRows;
         WF.NotifyIcon tray;
         WF.ToolStripMenuItem trayPopups;
         Border editorHost, banner;
@@ -75,6 +77,7 @@ namespace PadDeck.Ui
             }
             popup = new PopupWindow();
             hook = new KeyHook { OnPadKey = OnPadKey };
+            placer = new WindowPlacer(() => cfg.Windows, Dispatcher);
             SetupTray();
             UpdateStatus();
             if (!startHidden) Show();
@@ -213,7 +216,118 @@ namespace PadDeck.Ui
             bp.Children.Add(new TextBlock { Text = "The pad still sends F13–F18. Program it once so its buttons send F19–F24, which only PadDeck listens to.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = Theme.Text });
             banner.Child = bp;
             sp.Children.Add(banner);
+            sp.Children.Add(WindowsSection());
             return Card(sp);
+        }
+
+        // ---------------- window placement ----------------
+
+        static readonly AudioDevice[] MonitorItems =
+        {
+            new AudioDevice(nameof(MonitorPick.Left), "Left monitor"),
+            new AudioDevice(nameof(MonitorPick.Right), "Right monitor"),
+            new AudioDevice(nameof(MonitorPick.Main), "Main monitor"),
+        };
+
+        static readonly AudioDevice[] ZoneItems =
+        {
+            new AudioDevice(nameof(Zone.LeftHalf), "Left half"),
+            new AudioDevice(nameof(Zone.RightHalf), "Right half"),
+            new AudioDevice(nameof(Zone.TopHalf), "Top half"),
+            new AudioDevice(nameof(Zone.BottomHalf), "Bottom half"),
+            new AudioDevice(nameof(Zone.Full), "Whole screen"),
+            new AudioDevice(nameof(Zone.Maximized), "Maximized"),
+        };
+
+        FrameworkElement WindowsSection()
+        {
+            var sp = new StackPanel { Margin = new Thickness(0, 24, 0, 0) };
+            sp.Children.Add(new TextBlock { Text = "Window placement", FontSize = 14, FontWeight = FontWeights.SemiBold });
+            sp.Children.Add(new TextBlock { Text = "These apps’ windows go to the same spot every time they open.", FontSize = 12, Foreground = Theme.Muted, Margin = new Thickness(0, 2, 0, 12) });
+            windowRows = new StackPanel();
+            sp.Children.Add(windowRows);
+            BuildWindowRows();
+
+            var addRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+            var add = new ComboBox { Width = 230, Height = 32 };
+            add.Items.Add(new AudioDevice(null, "Add an open app…"));
+            add.SelectedIndex = 0;
+            add.DropDownOpened += (s, e) =>
+            {
+                var have = new HashSet<string>(cfg.Windows.Select(x => x.Process), StringComparer.OrdinalIgnoreCase);
+                var apps = Reset.Windows().Select(w => w.Process).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(n => !have.Contains(n) && n != "PadDeck" && n != "explorer").OrderBy(n => n).ToList();
+                add.Items.Clear();
+                add.Items.Add(new AudioDevice(null, apps.Count == 0 ? "No other apps are open" : "Add an open app…"));
+                foreach (var n in apps) add.Items.Add(new AudioDevice(n, n));
+                add.SelectedIndex = 0;
+            };
+            add.SelectionChanged += (s, e) =>
+            {
+                if (add.SelectedItem is not AudioDevice { Id: not null } d) return;
+                cfg.Windows.Add(new WindowRule { Name = AppTitle(d.Id), Process = d.Id, Monitor = MonitorPick.Main, Zone = Zone.Maximized });
+                MarkDirty();
+                Dispatcher.BeginInvoke(new Action(() => { BuildWindowRows(); add.SelectedIndex = 0; }));
+            };
+            addRow.Children.Add(add);
+            var apply = new Button { Content = "Apply now", Margin = new Thickness(8, 0, 0, 0), ToolTip = "Move the open windows into place right away" };
+            apply.Click += (s, e) => placer?.ApplyAll();
+            addRow.Children.Add(apply);
+            sp.Children.Add(addRow);
+            return sp;
+        }
+
+        static string AppTitle(string process)
+        {
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName(process))
+            {
+                using (p)
+                {
+                    try
+                    {
+                        var desc = p.MainModule.FileVersionInfo.FileDescription;
+                        if (!string.IsNullOrWhiteSpace(desc)) return desc.Trim();
+                    }
+                    catch { }
+                }
+            }
+            return process;
+        }
+
+        void BuildWindowRows()
+        {
+            windowRows.Children.Clear();
+            foreach (var r in cfg.Windows.ToList())
+            {
+                var g = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+                g.ColumnDefinitions.Add(new ColumnDefinition());
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var name = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+                name.Inlines.Add(new Run(r.Name) { FontWeight = FontWeights.SemiBold });
+                name.Inlines.Add(new Run("  " + r.Process) { FontFamily = Theme.Mono, FontSize = 10.5, Foreground = Theme.Muted });
+                g.Children.Add(name);
+
+                var mon = new ComboBox { Height = 30, Margin = new Thickness(6, 0, 0, 0), ItemsSource = MonitorItems };
+                mon.SelectedItem = MonitorItems.First(x => x.Id == r.Monitor.ToString());
+                mon.SelectionChanged += (s, e) => { r.Monitor = Enum.Parse<MonitorPick>(((AudioDevice)mon.SelectedItem).Id); MarkDirty(); };
+                Grid.SetColumn(mon, 1);
+                g.Children.Add(mon);
+
+                var zone = new ComboBox { Height = 30, Margin = new Thickness(6, 0, 0, 0), ItemsSource = ZoneItems };
+                zone.SelectedItem = ZoneItems.First(x => x.Id == r.Zone.ToString());
+                zone.SelectionChanged += (s, e) => { r.Zone = Enum.Parse<Zone>(((AudioDevice)zone.SelectedItem).Id); MarkDirty(); };
+                Grid.SetColumn(zone, 2);
+                g.Children.Add(zone);
+
+                var del = new Button { Content = new TextBlock { Text = "", FontFamily = Theme.Icons, FontSize = 10 }, Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Stop placing this app" };
+                del.Click += (s, e) => { cfg.Windows.Remove(r); MarkDirty(); BuildWindowRows(); };
+                Grid.SetColumn(del, 3);
+                g.Children.Add(del);
+                windowRows.Children.Add(g);
+            }
         }
 
         /// <summary>3 columns × 2 rows of fixed-size tiles.</summary>
@@ -367,6 +481,7 @@ namespace PadDeck.Ui
                 case ActionKind.OutputDevice: OutputFields(fields); break;
                 case ActionKind.AppMute: AppFields(fields, labelHint.hint); break;
                 case ActionKind.Reset: ResetFields(fields); break;
+                case ActionKind.Obs: ObsFields(fields, labelHint.hint); break;
             }
             sp.Children.Add(fields);
 
@@ -592,6 +707,20 @@ namespace PadDeck.Ui
             app.TextChanged += (s, e) => { Cur.App = app.Text; labelHint.Text = ActionRunner.AutoLabel(Cur); Changed(); };
             pick.SelectionChanged += (s, e) => { if (pick.SelectedItem is AudioDevice d) app.Text = d.Name; };
             sp.Children.Add(Note("Mutes just that app’s sound in the Windows volume mixer. Press again to unmute. Pick from the list while the app is playing something."));
+        }
+
+        void ObsFields(StackPanel sp, TextBlock labelHint)
+        {
+            sp.Children.Add(Caption("Command"));
+            var row = new WrapPanel();
+            foreach (ObsCommand c in Enum.GetValues(typeof(ObsCommand)))
+            {
+                var rb = new RadioButton { Style = Theme.Seg, GroupName = "obs" + sel, Content = Obs.Describe(c), IsChecked = Cur.ObsAction == c, Margin = new Thickness(0, 0, 0, 6) };
+                rb.Checked += (s, e) => { Cur.ObsAction = c; labelHint.Text = ActionRunner.AutoLabel(Cur); Changed(); };
+                row.Children.Add(rb);
+            }
+            sp.Children.Add(row);
+            sp.Children.Add(Note("Talks to OBS directly over its built-in WebSocket server, so no keys are sent to your game. The popup shows the saved file, or tells you if the replay buffer is off. Uses the port and password from OBS’s own settings."));
         }
 
         void ResetFields(StackPanel sp)
@@ -839,6 +968,7 @@ namespace PadDeck.Ui
             statusTimer.Stop();
             cfg.Save();
             hook?.Dispose();
+            placer?.Dispose();
             popup?.Close();
             tray.Visible = false;
             tray.Dispose();

@@ -25,6 +25,8 @@ namespace PadDeck.Tests
                 LabelTests();
                 CycleTests();
                 ResetTests();
+                WindowTests();
+                ObsTests();
             }
             catch (Exception ex)
             {
@@ -182,6 +184,34 @@ namespace PadDeck.Tests
             var cfg = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Reset\"}]}", AppSettings.Opts);
             cfg.Normalize();
             Check("reset kind loads, GPU stop defaults on", cfg.Buttons[0].Kind == ActionKind.Reset && cfg.Buttons[0].StopGpu && cfg.Buttons[0].Core != null);
+        }
+
+        static void WindowTests()
+        {
+            // This PC: GS27QA on the left at x -2560, X27U Z1 (primary) at 0.
+            var left = new PxRect { L = -2560, T = 0, R = 0, B = 1440 };
+            var main = new PxRect { L = 0, T = 0, R = 2560, B = 1440 };
+            var mons = new List<(PxRect, bool)> { (main, true), (left, false) };
+            Eq("left monitor is the one at x -2560", WindowPlacer.PickMonitor(mons, MonitorPick.Left), 1);
+            Eq("right monitor", WindowPlacer.PickMonitor(mons, MonitorPick.Right), 0);
+            Eq("main monitor", WindowPlacer.PickMonitor(mons, MonitorPick.Main), 0);
+            Eq("OBS: left half of left monitor", WindowPlacer.ZoneRect(left, Zone.LeftHalf).ToString(), "(-2560,0)-(-1280,1440)");
+            Eq("Discord: right half of left monitor", WindowPlacer.ZoneRect(left, Zone.RightHalf).ToString(), "(-1280,0)-(0,1440)");
+            Eq("bottom half", WindowPlacer.ZoneRect(main, Zone.BottomHalf).ToString(), "(0,720)-(2560,1440)");
+            // Window rect is 7 px wider than the visible frame on the left, right and bottom (standard Win11 borders).
+            var win = new PxRect { L = 93, T = 100, R = 1007, B = 807 };
+            var vis = new PxRect { L = 100, T = 100, R = 1000, B = 800 };
+            Eq("invisible borders added back", WindowPlacer.WithBorders(WindowPlacer.ZoneRect(left, Zone.LeftHalf), win, vis).ToString(), "(-2567,0)-(-1273,1447)");
+            var rule = JsonSerializer.Deserialize<AppSettings>("{\"Windows\":[{\"Process\":\"obs64\",\"Monitor\":\"Left\",\"Zone\":\"LeftHalf\"}]}", AppSettings.Opts);
+            Check("window rules load by name", rule.Windows[0].Monitor == MonitorPick.Left && rule.Windows[0].Zone == Zone.LeftHalf);
+        }
+
+        static void ObsTests()
+        {
+            // Example from the obs-websocket 5 protocol docs.
+            Eq("websocket auth string", Obs.AuthString("supersecretpassword", "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI=", "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="),
+                "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4=");
+            Eq("label for save replay", ActionRunner.AutoLabel(new ButtonConfig { Kind = ActionKind.Obs, ObsAction = ObsCommand.SaveReplay }), "Save replay");
         }
 
         static void CycleTests()

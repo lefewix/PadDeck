@@ -7,7 +7,16 @@ using Microsoft.Win32;
 
 namespace PadDeck
 {
-    public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute, Reset }
+    public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute, Reset, Obs }
+
+    /// <summary>Put an app's main window in a fixed spot whenever it opens.</summary>
+    public sealed class WindowRule
+    {
+        public string Name { get; set; } = "";
+        public string Process { get; set; } = "";
+        public Core.MonitorPick Monitor { get; set; }
+        public Core.Zone Zone { get; set; }
+    }
 
     /// <summary>A Reset core app: kept open, and started with Target/Args when its process isn't running.</summary>
     public sealed class CoreApp
@@ -51,6 +60,7 @@ namespace PadDeck
         public List<CoreApp> Core { get; set; } = new List<CoreApp>();
         /// <summary>Reset: stop the local LLM server and ComfyUI first (frees VRAM).</summary>
         public bool StopGpu { get; set; } = true;
+        public Core.ObsCommand ObsAction { get; set; }
 
         public bool IsSet => Kind != ActionKind.None;
     }
@@ -60,6 +70,7 @@ namespace PadDeck
         public const int ButtonCount = 6;
 
         public List<ButtonConfig> Buttons { get; set; } = new List<ButtonConfig>();
+        public List<WindowRule> Windows { get; set; } = new List<WindowRule>();
         public bool PopupOn { get; set; } = true;
         public bool PopupTop { get; set; }
         /// <summary>Screen device name (e.g. \\.\DISPLAY1); null = primary.</summary>
@@ -80,6 +91,7 @@ namespace PadDeck
         public void Normalize()
         {
             Buttons ??= new List<ButtonConfig>();
+            Windows ??= new List<WindowRule>();
             while (Buttons.Count < ButtonCount) Buttons.Add(new ButtonConfig());
             if (Buttons.Count > ButtonCount) Buttons.RemoveRange(ButtonCount, Buttons.Count - ButtonCount);
             foreach (var b in Buttons)

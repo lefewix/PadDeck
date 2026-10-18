@@ -37,6 +37,22 @@ namespace PadDeck
                 return err == null ? 0 : 1;
             }
 
+            if (args.Length >= 2 && args[0] == "--obs-ping")
+            {
+                File.WriteAllText(args[1], Core.Obs.Ping());
+                return 0;
+            }
+
+            if (args.Length >= 1 && args[0] == "--apply-windows")
+            {
+                // Places the open windows per the saved rules, once, without starting the hook or UI.
+                var cfg = AppSettings.Load();
+                using var placer = new Core.WindowPlacer(() => cfg.Windows, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                int n = placer.ApplyAll();
+                if (args.Length >= 2) File.WriteAllText(args[1], $"placed {n} window(s)");
+                return 0;
+            }
+
             if (args.Length >= 2 && args[0] == "--reset-plan")
             {
                 // Read-only: lists the windows a Reset would close and what it would start. Closes nothing.

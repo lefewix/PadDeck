@@ -14,7 +14,7 @@ namespace PadDeck.Core
         // Segoe Fluent Icons / MDL2 code points
         public const string Open = "", Keys = "", Text = "", Mic = "", MicOff = "",
             Speaker = "", Headphones = "", Volume = "", Mute = "", Warning = "", Empty = "",
-            Reset = "";
+            Reset = "", Replay = "", Record = "", Stream = "";
 
         public static string ForDevice(string name, bool recording)
         {
@@ -33,6 +33,7 @@ namespace PadDeck.Core
             ActionKind.OutputDevice => Speaker,
             ActionKind.AppMute => Volume,
             ActionKind.Reset => Reset,
+            ActionKind.Obs => Replay,
             _ => Empty,
         };
     }
@@ -49,6 +50,7 @@ namespace PadDeck.Core
             ActionKind.OutputDevice => "Sound switch",
             ActionKind.AppMute => "App mute",
             ActionKind.Reset => "Reset",
+            ActionKind.Obs => "OBS",
             _ => k.ToString(),
         };
 
@@ -68,6 +70,7 @@ namespace PadDeck.Core
                     return s.Length == 0 ? "Type text" : s.Length > 18 ? s.Substring(0, 18) + "…" : s;
                 case ActionKind.AppMute: return string.IsNullOrWhiteSpace(b.App) ? "App mute" : "Mute " + b.App.Trim();
                 case ActionKind.Reset: return "Reset";
+                case ActionKind.Obs: return Obs.Describe(b.ObsAction);
                 case ActionKind.None: return "";
                 default: return Describe(b.Kind);
             }
@@ -87,7 +90,7 @@ namespace PadDeck.Core
                     {
                         if (string.IsNullOrWhiteSpace(b.Target)) throw new InvalidOperationException("Nothing to open yet");
                         string target = Environment.ExpandEnvironmentVariables(b.Target.Trim().Trim('"'));
-                        var psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = b.Args ?? "" };
+                        var psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = Environment.ExpandEnvironmentVariables(b.Args ?? "") };
                         if (File.Exists(target)) psi.WorkingDirectory = Path.GetDirectoryName(target);
                         Process.Start(psi)?.Dispose();
                         return new Outcome(Glyphs.Open, title, "Opened", Tone.Normal);
@@ -125,6 +128,8 @@ namespace PadDeck.Core
                     }
                     case ActionKind.Reset:
                         return PadDeck.Core.Reset.Run(b);
+                    case ActionKind.Obs:
+                        return Obs.Run(b.ObsAction, title);
                     default:
                         return null;
                 }

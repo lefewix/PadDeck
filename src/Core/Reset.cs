@@ -143,7 +143,7 @@ namespace PadDeck.Core
                 RunHidden(target, c.Args ?? "", 10000);
                 return;
             }
-            var psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = c.Args ?? "" };
+            var psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = Environment.ExpandEnvironmentVariables(c.Args ?? "") };
             if (File.Exists(target)) psi.WorkingDirectory = Path.GetDirectoryName(target);
             Process.Start(psi)?.Dispose();
         }
