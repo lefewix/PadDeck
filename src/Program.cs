@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using PadDeck.Core;
@@ -18,9 +19,47 @@ namespace PadDeck
             return app;
         }
 
+        [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr token, bool inherit);
+        [DllImport("userenv.dll")] static extern bool DestroyEnvironmentBlock(IntPtr env);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+        /// <summary>
+        /// Swaps this process's environment for a fresh sign-in environment (what Explorer gives apps), so whatever
+        /// PadDeck launches never inherits variables from whoever started it. Started from a Claude Code shell, it
+        /// would otherwise pass on NO_COLOR, CLAUDECODE, GIT_EDITOR=true and the like.
+        /// </summary>
+        public static void CleanEnvironment()
+        {
+            if (!OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, 0x000A, out IntPtr token)) return; // QUERY | DUPLICATE
+            try
+            {
+                if (!CreateEnvironmentBlock(out IntPtr block, token, false)) return;
+                try
+                {
+                    var fresh = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    for (IntPtr p = block; ;)
+                    {
+                        string entry = Marshal.PtrToStringUni(p);
+                        if (string.IsNullOrEmpty(entry)) break;
+                        int eq = entry.IndexOf('=', 1); // entries like "=C:=C:\" start with '='
+                        if (eq > 0) fresh[entry.Substring(0, eq)] = entry.Substring(eq + 1);
+                        p += (entry.Length + 1) * 2;
+                    }
+                    if (fresh.Count == 0) return;
+                    foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+                        if (!fresh.ContainsKey((string)e.Key)) Environment.SetEnvironmentVariable((string)e.Key, null);
+                    foreach (var kv in fresh) Environment.SetEnvironmentVariable(kv.Key, kv.Value);
+                }
+                finally { DestroyEnvironmentBlock(block); }
+            }
+            finally { CloseHandle(token); }
+        }
+
         [STAThread]
         public static int Main(string[] args)
         {
+            try { CleanEnvironment(); } catch { }
             if (args.Length >= 2 && args[0] == "--selftest") return Tests.SelfTest.Run(args[1]);
 
             if (args.Length >= 2 && args[0] == "--program")
@@ -35,6 +74,16 @@ namespace PadDeck
                 }
                 File.WriteAllText(args[1], err ?? "ok");
                 return err == null ? 0 : 1;
+            }
+
+            if (args.Length >= 2 && args[0] == "--env")
+            {
+                // Writes the environment PadDeck hands to the apps it launches (after cleaning), for checking.
+                var lines = new System.Collections.Generic.List<string>();
+                foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables()) lines.Add(e.Key + "=" + e.Value);
+                lines.Sort(StringComparer.OrdinalIgnoreCase);
+                File.WriteAllLines(args[1], lines);
+                return 0;
             }
 
             if (args.Length >= 2 && args[0] == "--obs-ping")
