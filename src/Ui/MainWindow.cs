@@ -758,6 +758,14 @@ namespace PadDeck.Ui
             if (symbolsOpen)
             {
                 var grid = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+                foreach (var (key, name) in Icons.Lines)
+                {
+                    string spec = "line:" + key;
+                    bool on = string.Equals(Cur.Icon, spec, StringComparison.OrdinalIgnoreCase);
+                    var b = new Button { Content = Icons.LineVisual(key, 16, on ? Theme.Accent : Theme.Text), ToolTip = name + " (line logo)", Width = 38, Height = 34, Padding = new Thickness(0), Margin = new Thickness(0, 0, 4, 4) };
+                    b.Click += (s, e) => Set(spec);
+                    grid.Children.Add(b);
+                }
                 foreach (var (code, name) in Icons.Symbols)
                 {
                     string spec = "glyph:" + code;
@@ -954,8 +962,8 @@ namespace PadDeck.Ui
                 testResult.Foreground = o.Tone == Tone.Error ? Theme.Amber : Theme.Muted;
             }
             // App launches and OBS actions show the button's own icon; states like "mic muted" keep their symbol.
-            var img = o.Tone != Tone.Error && (b.Kind == ActionKind.Open || b.Kind == ActionKind.Obs) ? Icons.Load(b.Icon) : null;
-            if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs, img);
+            string icon = o.Tone != Tone.Error && (b.Kind == ActionKind.Open || b.Kind == ActionKind.Obs) && !string.IsNullOrEmpty(b.Icon) ? b.Icon : null;
+            if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs, icon);
         }
 
         // ---------------- pad ----------------

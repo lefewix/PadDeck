@@ -28,6 +28,88 @@ namespace PadDeck.Ui
             ("E8A7", "Open"), ("E9D9", "Chart"), ("E706", "Brightness"), ("E708", "Moon"), ("E8D6", "Music"),
         };
 
+        /// <summary>Line-drawn versions of app logos, styled like the Segoe symbols (1.5 px strokes on a 24 px grid).</summary>
+        public static readonly (string key, string name)[] Lines = { ("claude", "Claude"), ("comfyui", "ComfyUI"), ("obs", "OBS") };
+
+        public static bool IsLine(string spec, out string key)
+        {
+            key = spec != null && spec.StartsWith("line:", StringComparison.OrdinalIgnoreCase) ? spec.Substring(5).ToLowerInvariant() : null;
+            return key != null && LineGeometry(key) != null;
+        }
+
+        static readonly Dictionary<string, Geometry> lineCache = new Dictionary<string, Geometry>();
+
+        /// <summary>Path data on a 24×24 grid, drawn 2..22 like the Segoe glyphs.</summary>
+        public static Geometry LineGeometry(string key)
+        {
+            if (lineCache.TryGetValue(key, out var g)) return g;
+            string data = key switch
+            {
+                "claude" => ClaudeSpark(),
+                // Rounded tile with ComfyUI's slanted, angular "C".
+                "comfyui" => "M7,3 H17 A4,4 0 0 1 21,7 V17 A4,4 0 0 1 17,21 H7 A4,4 0 0 1 3,17 V7 A4,4 0 0 1 7,3 Z " +
+                             "M17.4,7 H10.6 L6.6,12.2 L9.6,17 H15.8",
+                // OBS: outer ring with three swirling "commas".
+                "obs" => "M21.5,12 A9.5,9.5 0 1 1 2.5,12 A9.5,9.5 0 1 1 21.5,12 Z " + ObsCommas(),
+                _ => null,
+            };
+            g = data == null ? null : Geometry.Parse(data);
+            g?.Freeze();
+            lineCache[key] = g;
+            return g;
+        }
+
+        /// <summary>Claude's spark: twelve rays of slightly uneven length around a small open centre.</summary>
+        static string ClaudeSpark()
+        {
+            double[] len = { 10, 7.6, 9.2, 7.2, 10, 8, 9.6, 7.2, 10, 7.6, 9.2, 8 };
+            var sb = new System.Text.StringBuilder();
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            for (int i = 0; i < 12; i++)
+            {
+                double a = (i * 30 - 90) * Math.PI / 180;
+                double r0 = 2.2, r1 = len[i];
+                sb.AppendFormat(inv, "M{0:0.##},{1:0.##} L{2:0.##},{3:0.##} ", 12 + r0 * Math.Cos(a), 12 + r0 * Math.Sin(a), 12 + r1 * Math.Cos(a), 12 + r1 * Math.Sin(a));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Three small circles 120° apart, each with a tail sweeping clockwise towards the next.</summary>
+        static string ObsCommas()
+        {
+            var sb = new System.Text.StringBuilder();
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            for (int i = 0; i < 3; i++)
+            {
+                double a = (i * 120 - 90) * Math.PI / 180;
+                double cx = 12 + 4.4 * Math.Cos(a), cy = 12 + 4.4 * Math.Sin(a), r = 2.2;
+                sb.AppendFormat(inv, "M{0:0.##},{1:0.##} A{2},{2} 0 1 1 {3:0.##},{1:0.##} A{2},{2} 0 1 1 {0:0.##},{1:0.##} Z ", cx + r, cy, r, cx - r);
+                // tail: from the circle's outer side, an arc around the centre at radius 7 for 70°
+                double t0 = a + 20 * Math.PI / 180, t1 = a + 90 * Math.PI / 180;
+                sb.AppendFormat(inv, "M{0:0.##},{1:0.##} A7,7 0 0 1 {2:0.##},{3:0.##} ", 12 + 7 * Math.Cos(t0), 12 + 7 * Math.Sin(t0), 12 + 7 * Math.Cos(t1), 12 + 7 * Math.Sin(t1));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>A line icon as a shape. <paramref name="size"/> is the glyph font size to match: Segoe symbols
+        /// fill about their whole em box, while these are drawn 2..22 on 24, so the box is scaled up by 24/20.</summary>
+        public static FrameworkElement LineVisual(string key, double size, Brush brush) => new System.Windows.Controls.Viewbox
+        {
+            Width = size * 1.2, Height = size * 1.2, Stretch = Stretch.Uniform,
+            Child = new System.Windows.Controls.Canvas
+            {
+                Width = 24, Height = 24,
+                Children =
+                {
+                    new System.Windows.Shapes.Path
+                    {
+                        Data = LineGeometry(key), Stroke = brush, StrokeThickness = 1.3, // ≈ the glyphs' stroke after the 1.2 scale-up
+                        StrokeLineJoin = PenLineJoin.Round, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+                    },
+                },
+            },
+        };
+
         public static bool IsGlyph(string spec, out string glyph)
         {
             glyph = null;
@@ -36,7 +118,8 @@ namespace PadDeck.Ui
             catch { return false; }
         }
 
-        public static bool IsImage(string spec) => !string.IsNullOrWhiteSpace(spec) && !spec.StartsWith("glyph:", StringComparison.OrdinalIgnoreCase);
+        public static bool IsImage(string spec) => !string.IsNullOrWhiteSpace(spec)
+            && !spec.StartsWith("glyph:", StringComparison.OrdinalIgnoreCase) && !spec.StartsWith("line:", StringComparison.OrdinalIgnoreCase);
 
         static readonly Dictionary<string, ImageSource> cache = new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
 
@@ -99,17 +182,22 @@ namespace PadDeck.Ui
             return dest;
         }
 
-        /// <summary>The visual for a button: an image if it has one, otherwise a symbol.</summary>
-        public static FrameworkElement Visual(ButtonConfig b, double size, Brush glyphBrush)
+        /// <summary>The visual for a button: an image if it has one, otherwise a line icon or symbol.</summary>
+        public static FrameworkElement Visual(ButtonConfig b, double size, Brush glyphBrush) => Draw(b.Icon, Core.Glyphs.For(b.Kind), size, glyphBrush);
+
+        /// <summary>Draws an icon spec; <paramref name="fallbackGlyph"/> is used for "" or anything unreadable.</summary>
+        public static FrameworkElement Draw(string spec, string fallbackGlyph, double size, Brush brush)
         {
-            if (Load(b.Icon) is ImageSource img)
+            if (Load(spec) is ImageSource img)
             {
                 var im = new System.Windows.Controls.Image { Source = img, Width = size, Height = size, Stretch = Stretch.Uniform };
                 RenderOptions.SetBitmapScalingMode(im, BitmapScalingMode.HighQuality);
                 return im;
             }
-            string glyph = IsGlyph(b.Icon, out var g) ? g : Core.Glyphs.For(b.Kind);
-            return new System.Windows.Controls.TextBlock { Text = glyph, FontFamily = Theme.Icons, FontSize = size * 0.8, Foreground = glyphBrush };
+            // Glyphs fill about 0.8 of their font size; line icons are drawn at that size so the two match.
+            if (IsLine(spec, out var key)) return LineVisual(key, size * 0.8, brush);
+            string glyph = IsGlyph(spec, out var g) ? g : fallbackGlyph;
+            return new System.Windows.Controls.TextBlock { Text = glyph, FontFamily = Theme.Icons, FontSize = size * 0.8, Foreground = brush };
         }
     }
 }

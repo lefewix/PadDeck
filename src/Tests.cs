@@ -221,6 +221,8 @@ namespace PadDeck.Tests
             Check("claude.exe icon loads", PadDeck.Ui.Icons.Load(System.Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.local\bin\claude.exe")) != null);
             Check("ComfyUI favicon loads", PadDeck.Ui.Icons.Load(@"C:\claude-tools\ComfyUI\_app\python_embeded\Lib\site-packages\comfyui_frontend_package\static\assets\favicon.ico") != null);
             Check("OBS shortcut icon loads", PadDeck.Ui.Icons.Load(@"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OBS Studio (replay buffer).lnk") != null);
+            Check("line logos parse", PadDeck.Ui.Icons.IsLine("line:claude", out _) && PadDeck.Ui.Icons.IsLine("line:comfyui", out _) && PadDeck.Ui.Icons.IsLine("line:OBS", out _));
+            Check("unknown line logo is rejected", !PadDeck.Ui.Icons.IsLine("line:nope", out _) && !PadDeck.Ui.Icons.IsImage("line:claude"));
             Check("missing icon file is null, not a crash", PadDeck.Ui.Icons.Load(@"C:\nope\missing.png") == null);
             Eq("label for save replay", ActionRunner.AutoLabel(new ButtonConfig { Kind = ActionKind.Obs, ObsAction = ObsCommand.SaveReplay }), "Save replay");
         }

@@ -133,11 +133,25 @@ namespace PadDeck
                 var w3 = new Ui.MainWindow(startHidden: true, preview: true); // the user's real settings
                 w3.SelectButton(0);
                 w3.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-real.png"), 1060, 640);
+                // Line icons next to Segoe symbols, at tile size and enlarged, to compare stroke weight and size.
+                var cmp = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+                foreach (double sz in new[] { 30.0, 110.0 })
+                {
+                    var row = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 16) };
+                    foreach (var spec in new[] { "glyph:E8F2", "glyph:E72C", "glyph:E7F6", "line:claude", "line:comfyui", "line:obs" })
+                        row.Children.Add(new System.Windows.Controls.Border { Width = sz * 1.3, Height = sz * 1.3, Child = Ui.Icons.Draw(spec, "?", sz, Ui.Theme.Accent) });
+                    cmp.Children.Add(row);
+                }
+                Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Panel2, Child = cmp, Width = 940, Height = 260 }, 940, 260,
+                    Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-lines.png"));
                 var w4 = new Ui.MainWindow(startHidden: true, preview: true); // icon picker with the symbol grid open
                 w4.SelectButton(1, symbols: true);
                 w4.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-icons.png"), 1060, 640);
-                var pop = Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off));
-                Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pop, Width = 420, Height = 120 }, 420, 120,
+                var pops = new System.Windows.Controls.StackPanel();
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off)));
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Replay, "Replay saved", "Replay 2026-10-17 22-41-05.mp4", Tone.On), "line:obs"));
+                pops.Children.Add(Ui.PopupWindow.Build(new Outcome(Glyphs.Open, "Claude", "Opened", Tone.Normal), "line:claude"));
+                Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pops, Width = 420, Height = 330 }, 420, 330,
                     Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-popup.png"));
                 return 0;
             }
