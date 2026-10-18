@@ -94,7 +94,8 @@ namespace PadDeck.Core
             }
             if (plan.Comfy && File.Exists(ComfyStop))
             {
-                RunHidden("cmd.exe", $"/c \"{ComfyStop}\"", 20000);
+                // keep-obs-closed: Stop.bat would otherwise restart OBS itself; Reset starts the core apps below
+                RunHidden("cmd.exe", $"/c {ComfyStop} keep-obs-closed", 20000);
                 done.Add("stopped ComfyUI");
             }
 
@@ -113,6 +114,7 @@ namespace PadDeck.Core
             var started = new List<string>();
             foreach (var c in plan.Start)
             {
+                if (Running(c.Process)) continue; // started meanwhile (e.g. by a launcher script)
                 try { Launch(c); started.Add(c.Name); }
                 catch { failed.Add(c.Name); }
             }
