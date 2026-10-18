@@ -48,7 +48,7 @@ namespace PadDeck.Ui
         }
 
         /// <summary>The popup's visual, also used for offscreen snapshots.</summary>
-        public static FrameworkElement Build(Outcome o)
+        public static FrameworkElement Build(Outcome o, ImageSource image = null)
         {
             var tone = Theme.ForTone(o.Tone);
             var g = new Grid();
@@ -56,8 +56,17 @@ namespace PadDeck.Ui
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var icon = new Grid { Width = 40, Height = 40, Margin = new Thickness(0, 0, 14, 0), VerticalAlignment = VerticalAlignment.Center };
-            icon.Children.Add(new System.Windows.Shapes.Ellipse { Fill = Theme.Tint(tone, 0.18) });
-            icon.Children.Add(new TextBlock { Text = o.Glyph, FontFamily = Theme.Icons, FontSize = 19, Foreground = tone, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+            if (image != null)
+            {
+                var im = new Image { Source = image, Width = 32, Height = 32, Stretch = Stretch.Uniform };
+                RenderOptions.SetBitmapScalingMode(im, BitmapScalingMode.HighQuality);
+                icon.Children.Add(im);
+            }
+            else
+            {
+                icon.Children.Add(new System.Windows.Shapes.Ellipse { Fill = Theme.Tint(tone, 0.18) });
+                icon.Children.Add(new TextBlock { Text = o.Glyph, FontFamily = Theme.Icons, FontSize = 19, Foreground = tone, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+            }
             g.Children.Add(icon);
 
             var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 360 };
@@ -83,11 +92,11 @@ namespace PadDeck.Ui
 
         /// <param name="force">Show even over a fullscreen game (used for Reset's "press again" confirmation).</param>
         /// <param name="holdMs">How long it stays fully visible; null = the user's popup duration.</param>
-        public void ShowOutcome(Outcome o, AppSettings cfg, bool force = false, int? holdMs = null)
+        public void ShowOutcome(Outcome o, AppSettings cfg, bool force = false, int? holdMs = null, ImageSource image = null)
         {
             if (!force && cfg.PopupSkipFullscreen && FullscreenAppInFront()) return;
             bool wasVisible = IsVisible && Opacity > 0.5;
-            host.Child = Build(o);
+            host.Child = Build(o, image);
             hold.Stop();
             hold.Interval = TimeSpan.FromMilliseconds(holdMs ?? (int)(Math.Clamp(cfg.PopupSeconds, 0.5, 15) * 1000));
             BeginAnimation(OpacityProperty, null);

@@ -27,6 +27,8 @@ namespace PadDeck
         /// <summary>What to run if it isn't running; empty = only keep it open.</summary>
         public string Target { get; set; } = "";
         public string Args { get; set; } = "";
+        /// <summary>Close and reopen it on every reset (e.g. to fix a misbehaving OBS).</summary>
+        public bool Restart { get; set; }
     }
 
     /// <summary>A sound device remembered by id and name, so it can be found again if Windows gives it a new id.</summary>
@@ -39,6 +41,8 @@ namespace PadDeck
     public sealed class ButtonConfig
     {
         public string Label { get; set; } = "";
+        /// <summary>"" = the action's default symbol, "glyph:E8BD" = a Segoe symbol, otherwise an image, .ico, .exe or .lnk path.</summary>
+        public string Icon { get; set; } = "";
         public ActionKind Kind { get; set; }
         /// <summary>Open: file, folder, app or URL.</summary>
         public string Target { get; set; } = "";

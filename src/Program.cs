@@ -133,6 +133,9 @@ namespace PadDeck
                 var w3 = new Ui.MainWindow(startHidden: true, preview: true); // the user's real settings
                 w3.SelectButton(0);
                 w3.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-real.png"), 1060, 640);
+                var w4 = new Ui.MainWindow(startHidden: true, preview: true); // icon picker with the symbol grid open
+                w4.SelectButton(1, symbols: true);
+                w4.RenderSnapshot(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-icons.png"), 1060, 640);
                 var pop = Ui.PopupWindow.Build(new Outcome(Glyphs.MicOff, "Mic muted", "Microphone (HyperX QuadCast S)", Tone.Off));
                 Ui.Snapshot.Save(new System.Windows.Controls.Border { Background = Ui.Theme.Bg, Child = pop, Width = 420, Height = 120 }, 420, 120,
                     Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), Path.GetFileNameWithoutExtension(args[1]) + "-popup.png"));

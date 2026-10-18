@@ -25,7 +25,7 @@ namespace PadDeck.Ui
         readonly AppSettings cfg = AppSettings.Load();
         readonly DispatcherTimer saveTimer, statusTimer;
         readonly Border[] tiles = new Border[AppSettings.ButtonCount];
-        readonly TextBlock[] tileGlyphs = new TextBlock[AppSettings.ButtonCount];
+        readonly ContentControl[] tileIcons = new ContentControl[AppSettings.ButtonCount];
         readonly TextBlock[] tileLabels = new TextBlock[AppSettings.ButtonCount];
         readonly bool preview;
 
@@ -95,7 +95,7 @@ namespace PadDeck.Ui
             Snapshot.Save(host, w, h, path);
         }
 
-        public void SelectButton(int i) { UpdateStatus(); Select(i); }
+        public void SelectButton(int i, bool symbols = false) { symbolsOpen = symbols; UpdateStatus(); Select(i); }
 
         /// <summary>Fills in example buttons for snapshots (not saved).</summary>
         public void LoadSample(int select = 3)
@@ -339,8 +339,8 @@ namespace PadDeck.Ui
         Border Tile(int i)
         {
             var g = new Grid();
-            tileGlyphs[i] = new TextBlock { FontFamily = Theme.Icons, FontSize = 22, Foreground = Theme.Accent, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left };
-            g.Children.Add(tileGlyphs[i]);
+            tileIcons[i] = new ContentControl { Focusable = false, IsTabStop = false, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left };
+            g.Children.Add(tileIcons[i]);
             g.Children.Add(new TextBlock { Text = KeyOf(i), FontFamily = Theme.Mono, FontSize = 10, Foreground = Theme.Muted, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top });
             tileLabels[i] = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 36, VerticalAlignment = VerticalAlignment.Bottom };
             g.Children.Add(tileLabels[i]);
@@ -363,8 +363,7 @@ namespace PadDeck.Ui
         void RefreshTile(int i)
         {
             var b = cfg.Buttons[i];
-            tileGlyphs[i].Text = Glyphs.For(b.Kind);
-            tileGlyphs[i].Foreground = b.IsSet ? Theme.Accent : Theme.Track;
+            tileIcons[i].Content = b.IsSet ? Icons.Visual(b, 30, Theme.Accent) : new TextBlock { Text = Glyphs.Empty, FontFamily = Theme.Icons, FontSize = 22, Foreground = Theme.Track };
             tileLabels[i].Text = b.IsSet ? ActionRunner.Title(b) : "Not set";
             tileLabels[i].Foreground = b.IsSet ? Theme.Text : Theme.Muted;
             tileLabels[i].FontWeight = b.IsSet ? FontWeights.SemiBold : FontWeights.Normal;
@@ -475,6 +474,7 @@ namespace PadDeck.Ui
             var labelHint = Hint(label, ActionRunner.AutoLabel(b));
             label.TextChanged += (s, e) => { Cur.Label = label.Text; Changed(); };
             sp.Children.Add(labelHint.host);
+            IconPicker(sp);
 
             var fields = new StackPanel();
             switch (b.Kind)
@@ -714,6 +714,79 @@ namespace PadDeck.Ui
             sp.Children.Add(Note("Mutes just that app’s sound in the Windows volume mixer. Press again to unmute. Pick from the list while the app is playing something."));
         }
 
+        bool symbolsOpen;
+
+        /// <summary>Icon row: preview, default, symbol grid, the target app's own icon, or any image file.</summary>
+        void IconPicker(StackPanel sp)
+        {
+            sp.Children.Add(Caption("Icon on the pad"));
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            var preview = new Border
+            {
+                Width = 40, Height = 40, CornerRadius = new CornerRadius(8), Background = Theme.Panel2, BorderBrush = Theme.Line,
+                BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 10, 0),
+                Child = new ContentControl { Content = Icons.Visual(Cur, 24, Theme.Accent), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Focusable = false },
+            };
+            row.Children.Add(preview);
+
+            void Set(string spec)
+            {
+                Cur.Icon = spec;
+                Changed();
+                editorHost.Child = Editor();
+            }
+            Button Btn(string text, string tip, Action click)
+            {
+                var b = new Button { Content = text, ToolTip = tip, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+                b.Click += (s, e) => click();
+                row.Children.Add(b);
+                return b;
+            }
+            Btn("Default", "The action’s own symbol", () => { symbolsOpen = false; Set(""); });
+            Btn(symbolsOpen ? "Hide symbols" : "Symbol…", "Pick from a set of symbols", () => { symbolsOpen = !symbolsOpen; editorHost.Child = Editor(); });
+            string app = AppIconSource(Cur);
+            if (app != null) Btn("App icon", "Use the icon of " + System.IO.Path.GetFileName(app), () => { symbolsOpen = false; Set(app); });
+            Btn("Image…", "A picture (.png, .jpg, .ico) or any app (.exe, .lnk)", () =>
+            {
+                var d = new Microsoft.Win32.OpenFileDialog { Title = "Choose an icon", Filter = "Images and apps|*.png;*.jpg;*.jpeg;*.bmp;*.ico;*.exe;*.lnk|All files|*.*", DereferenceLinks = false };
+                if (d.ShowDialog(this) != true) return;
+                try { symbolsOpen = false; Set(Icons.Keep(d.FileName, sel)); }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "Icon", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            });
+            sp.Children.Add(row);
+
+            if (symbolsOpen)
+            {
+                var grid = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+                foreach (var (code, name) in Icons.Symbols)
+                {
+                    string spec = "glyph:" + code;
+                    bool on = string.Equals(Cur.Icon, spec, StringComparison.OrdinalIgnoreCase);
+                    var b = new Button
+                    {
+                        Content = new TextBlock { Text = char.ConvertFromUtf32(Convert.ToInt32(code, 16)), FontFamily = Theme.Icons, FontSize = 16, Foreground = on ? Theme.Accent : Theme.Text },
+                        ToolTip = name, Width = 38, Height = 34, Padding = new Thickness(0), Margin = new Thickness(0, 0, 4, 4),
+                    };
+                    b.Click += (s, e) => Set(spec);
+                    grid.Children.Add(b);
+                }
+                sp.Children.Add(grid);
+            }
+            if (Icons.IsImage(Cur.Icon) && Icons.Load(Cur.Icon) == null)
+                sp.Children.Add(Note("That icon file can’t be read any more, so the default symbol is shown.", 4));
+        }
+
+        /// <summary>The app whose icon "App icon" would use: the Open target, or OBS for OBS actions.</summary>
+        static string AppIconSource(ButtonConfig b)
+        {
+            if (b.Kind == ActionKind.Obs) return @"C:\Program Files\obs-studio\bin\64bit\obs64.exe";
+            if (b.Kind != ActionKind.Open || string.IsNullOrWhiteSpace(b.Target)) return null;
+            string t = Environment.ExpandEnvironmentVariables(b.Target.Trim().Trim('"'));
+            string ext = System.IO.Path.GetExtension(t).ToLowerInvariant();
+            if ((ext == ".exe" || ext == ".lnk") && System.IO.File.Exists(t)) return b.Target.Trim().Trim('"');
+            return null;
+        }
+
         void ObsFields(StackPanel sp, TextBlock labelHint)
         {
             sp.Children.Add(Caption("Command"));
@@ -740,6 +813,16 @@ namespace PadDeck.Ui
                 del.Click += (s, e) => { Cur.Core.Remove(c); Changed(); editorHost.Child = Editor(); };
                 DockPanel.SetDock(del, Dock.Right);
                 head.Children.Add(del);
+                var restart = new CheckBox
+                {
+                    Style = Theme.Switch, Content = "Restart", IsChecked = c.Restart, FontSize = 12, Margin = new Thickness(0, 0, 14, 0),
+                    ToolTip = c.Process.Equals("thorium", StringComparison.OrdinalIgnoreCase)
+                        ? "Close and reopen it on every reset. Thorium isn’t set to restore tabs, so open tabs would be lost."
+                        : "Close and reopen it on every reset, e.g. when OBS misbehaves",
+                };
+                restart.Click += (s, e) => { c.Restart = restart.IsChecked == true; MarkDirty(); };
+                DockPanel.SetDock(restart, Dock.Right);
+                head.Children.Add(restart);
                 var name = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
                 name.Inlines.Add(new Run(c.Name) { FontWeight = FontWeights.SemiBold });
                 name.Inlines.Add(new Run("   " + c.Process) { FontFamily = Theme.Mono, FontSize = 10.5, Foreground = Theme.Muted });
@@ -811,7 +894,8 @@ namespace PadDeck.Ui
             sp.Children.Add(gpu);
             sp.Children.Add(Note("Every other app with a window is asked to close, like clicking its X. Apps with unsaved work can still ask, and stay open. " +
                 "Apps that only live in the tray are left alone, and Windows Terminal, File Explorer and PadDeck are never closed. " +
-                "Press the button twice within 3 seconds: the first press shows what will close.", 10));
+                "Core apps with Restart on are closed and reopened (ended after 10 s if they hang), which fixes a misbehaving OBS. " +
+                "Press the button twice within 3 seconds: the first press shows what will happen.", 10));
         }
 
         void Changed()
@@ -869,7 +953,9 @@ namespace PadDeck.Ui
                 testResult.Text = o.Title + (string.IsNullOrEmpty(o.Detail) ? "" : " · " + o.Detail);
                 testResult.Foreground = o.Tone == Tone.Error ? Theme.Amber : Theme.Muted;
             }
-            if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs);
+            // App launches and OBS actions show the button's own icon; states like "mic muted" keep their symbol.
+            var img = o.Tone != Tone.Error && (b.Kind == ActionKind.Open || b.Kind == ActionKind.Obs) ? Icons.Load(b.Icon) : null;
+            if (cfg.PopupOn || force) popup?.ShowOutcome(o, cfg, force, holdMs, img);
         }
 
         // ---------------- pad ----------------

@@ -92,7 +92,7 @@ namespace PadDeck.Core
                         string target = Environment.ExpandEnvironmentVariables(b.Target.Trim().Trim('"'));
                         var psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = Environment.ExpandEnvironmentVariables(b.Args ?? "") };
                         if (File.Exists(target)) psi.WorkingDirectory = Path.GetDirectoryName(target);
-                        Process.Start(psi)?.Dispose();
+                        Foreground.LaunchAndFocus(() => Process.Start(psi)?.Dispose());
                         return new Outcome(Glyphs.Open, title, "Opened", Tone.Normal);
                     }
                     case ActionKind.Keys:

@@ -180,6 +180,11 @@ namespace PadDeck.Tests
             Check("Fan Control starts via its elevated task", core[2].Target == "schtasks.exe" && core[2].Args.Contains("FanControl"));
             var p = new Reset.Plan { Llm = true, Close = close, Start = { core[0] } };
             Eq("plan description", Reset.Describe(p), "Stop the LLM, close notepad, Spotify, steamwebhelper, start OBS Studio");
+            var r = new Reset.Plan { Restart = { core[0], core[1] } };
+            Eq("restart description", Reset.Describe(r), "Restart OBS Studio, Discord");
+            Check("OBS and Discord restart by default, Fan Control and Thorium don't", core[0].Restart && core[1].Restart && !core[2].Restart && !core[3].Restart);
+            Eq("Fan Control restarts via its task", Reset.EndTaskArgs(core[2]), "/end /tn FanControl");
+            Eq("non-task apps have no end-task command", Reset.EndTaskArgs(core[0]), null);
             Eq("empty plan", Reset.Describe(new Reset.Plan()), "Nothing to do: only core apps are open");
             var cfg = JsonSerializer.Deserialize<AppSettings>("{\"Buttons\":[{\"Kind\":\"Reset\"}]}", AppSettings.Opts);
             cfg.Normalize();
@@ -211,6 +216,12 @@ namespace PadDeck.Tests
             // Example from the obs-websocket 5 protocol docs.
             Eq("websocket auth string", Obs.AuthString("supersecretpassword", "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI=", "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="),
                 "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4=");
+            Check("glyph icon spec parses", PadDeck.Ui.Icons.IsGlyph("glyph:E8F2", out var gl) && gl == "\uE8F2");
+            Check("file icon spec is an image", PadDeck.Ui.Icons.IsImage(@"C:\x\claude.exe") && !PadDeck.Ui.Icons.IsImage("glyph:E8F2") && !PadDeck.Ui.Icons.IsImage(""));
+            Check("claude.exe icon loads", PadDeck.Ui.Icons.Load(System.Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.local\bin\claude.exe")) != null);
+            Check("ComfyUI favicon loads", PadDeck.Ui.Icons.Load(@"C:\claude-tools\ComfyUI\_app\python_embeded\Lib\site-packages\comfyui_frontend_package\static\assets\favicon.ico") != null);
+            Check("OBS shortcut icon loads", PadDeck.Ui.Icons.Load(@"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OBS Studio (replay buffer).lnk") != null);
+            Check("missing icon file is null, not a crash", PadDeck.Ui.Icons.Load(@"C:\nope\missing.png") == null);
             Eq("label for save replay", ActionRunner.AutoLabel(new ButtonConfig { Kind = ActionKind.Obs, ObsAction = ObsCommand.SaveReplay }), "Save replay");
         }
 

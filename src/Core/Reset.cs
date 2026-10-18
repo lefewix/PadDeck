@@ -29,8 +29,8 @@ namespace PadDeck.Core
 
         public static List<CoreApp> DefaultCore() => new List<CoreApp>
         {
-            new CoreApp { Name = "OBS Studio", Process = "obs64", Target = @"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OBS Studio (replay buffer).lnk" },
-            new CoreApp { Name = "Discord", Process = "Discord", Target = @"%LOCALAPPDATA%\Discord\Update.exe", Args = "--processStart Discord.exe" },
+            new CoreApp { Name = "OBS Studio", Process = "obs64", Target = @"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OBS Studio (replay buffer).lnk", Restart = true },
+            new CoreApp { Name = "Discord", Process = "Discord", Target = @"%LOCALAPPDATA%\Discord\Update.exe", Args = "--processStart Discord.exe", Restart = true },
             new CoreApp { Name = "Fan Control", Process = "FanControl", Target = "schtasks.exe", Args = "/run /tn FanControl" },
             new CoreApp { Name = "Thorium", Process = "thorium", Target = @"C:\Program Files\Thorium\Application\thorium.exe" },
         };
@@ -41,6 +41,7 @@ namespace PadDeck.Core
         {
             public List<AppWindow> Close = new List<AppWindow>();
             public List<CoreApp> Start = new List<CoreApp>();
+            public List<CoreApp> Restart = new List<CoreApp>();
             public bool Llm, Comfy;
 
             /// <summary>Distinct app names, in window order.</summary>
@@ -58,7 +59,11 @@ namespace PadDeck.Core
         {
             var p = new Plan { Close = ToClose(Windows(), b.Core) };
             foreach (var c in b.Core)
-                if (!string.IsNullOrWhiteSpace(c.Target) && !Running(c.Process)) p.Start.Add(c);
+            {
+                if (string.IsNullOrWhiteSpace(c.Target)) continue;
+                if (!Running(c.Process)) p.Start.Add(c);
+                else if (c.Restart) p.Restart.Add(c);
+            }
             if (b.StopGpu)
             {
                 p.Llm = Running(LlmServer);
@@ -73,6 +78,7 @@ namespace PadDeck.Core
             var names = p.CloseNames;
             if (p.Llm || p.Comfy) parts.Add("stop " + string.Join(" and ", new[] { p.Llm ? "the LLM" : null, p.Comfy ? "ComfyUI" : null }.Where(s => s != null)));
             if (names.Count > 0) parts.Add("close " + List(names));
+            if (p.Restart.Count > 0) parts.Add("restart " + List(p.Restart.Select(c => c.Name).ToList()));
             if (p.Start.Count > 0) parts.Add("start " + List(p.Start.Select(c => c.Name).ToList()));
             if (parts.Count == 0) return "Nothing to do: only core apps are open";
             string s = string.Join(", ", parts);
@@ -110,22 +116,79 @@ namespace PadDeck.Core
             int closed = plan.CloseNames.Count - open.Select(w => w.Process).Distinct(StringComparer.OrdinalIgnoreCase).Count();
             if (closed > 0) done.Add($"closed {closed} app{(closed == 1 ? "" : "s")}");
 
+            // Restarts: close every core app marked for it at once, then they all start again below.
+            var restarted = new List<string>();
+            var stuck = new List<string>();
+            foreach (var c in plan.Restart) BeginClose(c);
+            foreach (var c in plan.Restart)
+            {
+                if (WaitClosed(c.Process, 10000)) restarted.Add(c.Name);
+                else stuck.Add(c.Name);
+            }
+
             var failed = new List<string>();
             var started = new List<string>();
-            foreach (var c in plan.Start)
+            foreach (var c in b.Core)
             {
-                if (Running(c.Process)) continue; // started meanwhile (e.g. by a launcher script)
-                try { Launch(c); started.Add(c.Name); }
-                catch { failed.Add(c.Name); }
+                if (string.IsNullOrWhiteSpace(c.Target) || Running(c.Process)) continue; // running, or started meanwhile by a launcher script
+                try { Launch(c); if (!restarted.Contains(c.Name)) started.Add(c.Name); }
+                catch { failed.Add(c.Name); restarted.Remove(c.Name); }
             }
+            if (restarted.Count > 0) done.Add("restarted " + string.Join(", ", restarted));
             if (started.Count > 0) done.Add("started " + string.Join(", ", started));
+            failed.AddRange(stuck.Select(n => n + " (wouldn’t close)"));
 
             var stillOpen = open.Select(w => w.Process).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             string detail = done.Count == 0 ? "Already clean" : char.ToUpper(done[0][0]) + string.Join(", ", done).Substring(1);
             if (stillOpen.Count > 0) detail += " · still open: " + List(stillOpen);
-            if (failed.Count > 0) detail += " · couldn’t start " + string.Join(", ", failed);
+            if (failed.Count > 0) detail += " · couldn’t restart/start " + string.Join(", ", failed);
             bool clean = stillOpen.Count == 0 && failed.Count == 0;
             return new Outcome(Glyphs.Reset, "Reset", detail, clean ? Tone.On : Tone.Error);
+        }
+
+        /// <summary>Apps that hide to the tray when their window is closed, so they're ended directly to restart them.</summary>
+        static readonly HashSet<string> EndDirectly = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Discord" };
+
+        /// <summary>For an app started with "schtasks /run /tn X", the matching command that ends that task.</summary>
+        public static string EndTaskArgs(CoreApp c)
+        {
+            if (!Path.GetFileName(c.Target.Trim().Trim('"')).Equals("schtasks.exe", StringComparison.OrdinalIgnoreCase)) return null;
+            var a = c.Args ?? "";
+            return a.Contains("/run", StringComparison.OrdinalIgnoreCase) ? System.Text.RegularExpressions.Regex.Replace(a, "/run", "/end", System.Text.RegularExpressions.RegexOptions.IgnoreCase) : null;
+        }
+
+        /// <summary>Starts closing a core app: its scheduled task is ended, tray apps are ended, others get WM_CLOSE on every window (including hidden tray windows, which is how OBS quits).</summary>
+        static void BeginClose(CoreApp c)
+        {
+            string end = EndTaskArgs(c);
+            if (end != null) { RunHidden("schtasks.exe", end, 10000); return; }
+            var ids = new HashSet<int>();
+            foreach (var p in Process.GetProcessesByName(c.Process)) using (p) ids.Add(p.Id);
+            if (EndDirectly.Contains(c.Process)) { KillAll(c.Process); return; }
+            EnumWindows((h, l) =>
+            {
+                GetWindowThreadProcessId(h, out int pid);
+                if (ids.Contains(pid)) PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }, IntPtr.Zero);
+        }
+
+        /// <summary>Waits for the app to exit; after the timeout (e.g. OBS hung or asking to confirm), ends it.</summary>
+        static bool WaitClosed(string process, int timeoutMs)
+        {
+            for (int t = 0; t < timeoutMs; t += 250)
+            {
+                if (!Running(process)) return true;
+                Thread.Sleep(250);
+            }
+            KillAll(process);
+            for (int t = 0; t < 5000 && Running(process); t += 250) Thread.Sleep(250);
+            return !Running(process);
+        }
+
+        static void KillAll(string process)
+        {
+            foreach (var p in Process.GetProcessesByName(process)) using (p) { try { p.Kill(true); } catch { } }
         }
 
         public static void Launch(CoreApp c)

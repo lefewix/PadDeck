@@ -159,6 +159,8 @@ namespace PadDeck.Core
             if (sent != inputs.Length) throw new InvalidOperationException("Windows blocked the keystrokes (is an admin window in front?)");
         }
 
+        public static void SendKey(ushort vk, bool up) => Send(new[] { Key(vk, up) });
+
         public static void SendSequence(List<List<ushort>> seq)
         {
             for (int i = 0; i < seq.Count; i++)
