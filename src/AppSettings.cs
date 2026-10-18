@@ -1,0 +1,111 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Win32;
+
+namespace PadDeck
+{
+    public enum ActionKind { None, Open, Keys, Text, MicMute, OutputDevice, AppMute }
+
+    public sealed class ButtonConfig
+    {
+        public string Label { get; set; } = "";
+        public ActionKind Kind { get; set; }
+        /// <summary>Open: file, folder, app or URL.</summary>
+        public string Target { get; set; } = "";
+        public string Args { get; set; } = "";
+        /// <summary>Keys: e.g. "Ctrl+Shift+M" or "Ctrl+C, Ctrl+V".</summary>
+        public string Keys { get; set; } = "";
+        public string Text { get; set; } = "";
+        /// <summary>MicMute: capture endpoint id, null = the default mic.</summary>
+        public string DeviceId { get; set; }
+        /// <summary>OutputDevice: render endpoint ids to cycle through.</summary>
+        public List<string> DeviceIds { get; set; } = new List<string>();
+        /// <summary>AppMute: process name without .exe, e.g. "Discord".</summary>
+        public string App { get; set; } = "";
+
+        public bool IsSet => Kind != ActionKind.None;
+    }
+
+    public sealed class AppSettings
+    {
+        public const int ButtonCount = 6;
+
+        public List<ButtonConfig> Buttons { get; set; } = new List<ButtonConfig>();
+        public bool PopupOn { get; set; } = true;
+        public bool PopupTop { get; set; }
+        /// <summary>Screen device name (e.g. \\.\DISPLAY1); null = primary.</summary>
+        public string PopupScreen { get; set; }
+        public bool PopupSkipFullscreen { get; set; }
+        public bool CloseToTray { get; set; } = true;
+        public bool PadProgrammed { get; set; }
+        public bool FirstRunDone { get; set; }
+
+        static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PadDeck");
+        static readonly string FilePath = Path.Combine(Dir, "settings.json");
+        internal static readonly JsonSerializerOptions Opts = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() },
+        };
+
+        public void Normalize()
+        {
+            Buttons ??= new List<ButtonConfig>();
+            while (Buttons.Count < ButtonCount) Buttons.Add(new ButtonConfig());
+            if (Buttons.Count > ButtonCount) Buttons.RemoveRange(ButtonCount, Buttons.Count - ButtonCount);
+            foreach (var b in Buttons) b.DeviceIds ??= new List<string>();
+        }
+
+        public static AppSettings Load()
+        {
+            try
+            {
+                if (File.Exists(FilePath))
+                {
+                    var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Opts);
+                    if (s != null) { s.Normalize(); return s; }
+                }
+            }
+            catch { }
+            var d = new AppSettings();
+            d.Normalize();
+            return d;
+        }
+
+        public void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                string tmp = FilePath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(this, Opts));
+                File.Move(tmp, FilePath, true);
+            }
+            catch { }
+        }
+    }
+
+    static class Autostart
+    {
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        const string Name = "PadDeck";
+
+        public static bool Enabled
+        {
+            get
+            {
+                using var k = Registry.CurrentUser.OpenSubKey(RunKey);
+                return k?.GetValue(Name) != null;
+            }
+            set
+            {
+                using var k = Registry.CurrentUser.CreateSubKey(RunKey);
+                if (value) k.SetValue(Name, $"\"{Environment.ProcessPath}\" --tray");
+                else k.DeleteValue(Name, false);
+            }
+        }
+    }
+}
