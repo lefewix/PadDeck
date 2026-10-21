@@ -17,7 +17,7 @@ F19–F24. Keys with an action are swallowed, and unset keys pass through so gam
 
 | Action | What it does |
 |---|---|
-| **Open** | A file, app, folder, URL or script. The new window is brought to the front. Can be an **on/off switch**: give it a "running" check (`llama-server`, or `python in C:\some\folder`) and a stop script, and a press while it's on asks for a second press, then runs the stop script. **GPU-heavy** switches won't start while OBS is live or recording. |
+| **Open** | A file, app, folder, URL or script. The new window is brought to the front. Can be an **on/off switch**: give it a "running" check (`llama-server`, or `python in C:\some\folder`) and a stop script, and it needs two presses within 3 s either way: on runs the target, off runs the stop script. **GPU-heavy** switches won't start while OBS is live or recording. |
 | **Keys** | A key combo or sequence, e.g. `Ctrl+Shift+M` or `Ctrl+C, Ctrl+V`. |
 | **Type text** | Types text (newlines become Enter). |
 | **Mic mute** | Toggles the default (or a chosen) microphone. |

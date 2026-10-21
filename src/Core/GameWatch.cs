@@ -50,7 +50,7 @@ namespace PadDeck.Core
         /// <param name="replay">True = buffering, false = off, null = OBS couldn't be asked (no warning then).</param>
         public static List<string> Lines(IList<(string title, int index)> toolsOn, bool? replay, int replayButton)
         {
-            var lines = toolsOn.Select(t => $"{t.title} is on · press {Key(t.index)} to turn it off").ToList();
+            var lines = toolsOn.Select(t => $"{t.title} is on · press {Key(t.index)} twice to turn it off").ToList();
             if (replay == false)
                 lines.Add(toolsOn.Count > 0 || replayButton < 0 ? "Replay buffer is off" : $"Replay buffer is off · press {Key(replayButton)} to turn it on");
             return lines;

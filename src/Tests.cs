@@ -302,7 +302,7 @@ namespace PadDeck.Tests
             Eq("OBS not answering: no nag", GameWatch.Lines(new List<(string, int)>(), null, 4).Count, 0);
             Eq("no replay buffer", string.Join(" | ", GameWatch.Lines(new List<(string, int)>(), false, 4)), "Replay buffer is off · press F23 to turn it on");
             Eq("ComfyUI on (it closed OBS)", string.Join(" | ", GameWatch.Lines(new List<(string, int)> { ("ComfyUI", 2) }, false, 4)),
-                "ComfyUI is on · press F21 to turn it off | Replay buffer is off");
+                "ComfyUI is on · press F21 twice to turn it off | Replay buffer is off");
             Eq("no save-replay button", string.Join(" | ", GameWatch.Lines(new List<(string, int)>(), false, -1)), "Replay buffer is off");
         }
 

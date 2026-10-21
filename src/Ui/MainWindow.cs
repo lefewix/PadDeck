@@ -583,7 +583,7 @@ namespace PadDeck.Ui
                 ToolTip = "Won’t start while OBS is live or recording, and you get a warning if a game starts while it’s on" };
             gpu.Click += (s, e) => { Cur.GpuHeavy = gpu.IsChecked == true; MarkDirty(); };
             sp.Children.Add(gpu);
-            sp.Children.Add(Note("When it’s on, a press asks you to press again, then runs the stop script. Leave both boxes empty to always just open."));
+            sp.Children.Add(Note("Press twice within 3 seconds to turn it on or off: the first press says which. Off runs the stop script.Leave both boxes empty to always just open."));
         }
 
         /// <summary>A text box for a path, with a Browse… button that fills it in.</summary>
@@ -999,7 +999,7 @@ namespace PadDeck.Ui
         }
 
         /// <summary>
-        /// Runs a button's action and shows the result. Reset, and an on/off switch that's on, need a second press
+        /// Runs a button's action and shows the result. Reset and on/off switches (either way) need a second press
         /// within 3 s. Once an action runs, more presses of that button are ignored until it's done.
         /// </summary>
         async void Fire(ButtonConfig b)
@@ -1022,14 +1022,15 @@ namespace PadDeck.Ui
                     return;
                 }
             }
-            else if (b.IsToggle && Toggle.IsOn(b.RunningProcess))
+            else if (b.IsToggle)
             {
+                bool on = Toggle.IsOn(b.RunningProcess);
                 if (!Confirmed(b))
                 {
-                    ShowResult(b, new Outcome(Glyphs.Power, title + " is on", "Press again to turn it off", Tone.Normal), true, 3000);
+                    ShowResult(b, new Outcome(Glyphs.Power, title + (on ? " is on" : " is off"), on ? "Press again to turn it off" : "Press again to turn it on", Tone.Normal), true, 3000);
                     return;
                 }
-                stopping = true;
+                stopping = on;
             }
             else armed = null;
 
