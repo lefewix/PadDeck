@@ -1,74 +1,96 @@
+<div align="center">
+
+<img src="assets/icon.png" width="88" alt="PadDeck icon">
+
 # PadDeck
 
-A Stream Deck–style app for a cheap 6-key, 1-knob macropad (CH57x, USB `1189:8840`). Each key runs an action and
-shows a small popup that never takes focus, so it works over games.
+**Turn a $15 macropad into a Stream Deck.**
 
-## The pad
+![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white)
+![C#](https://img.shields.io/badge/C%23-.NET_10-512BD4?style=flat-square&logo=dotnet&logoColor=white)
+![WPF](https://img.shields.io/badge/UI-WPF-512BD4?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
-The pad is reprogrammed once (Program pad… in the app, or `PadDeck.exe --program out.txt`) to send **F19–F24**
-on its six keys, with the knob on volume down / play-pause / volume up. The layout is stored on the pad
-itself. Programming goes through the pad's vendor HID interface (`MI_00`, output report id 3), so no extra driver
-is needed; the protocol is from [kriomant/ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool).
+</div>
 
-A low-level keyboard hook (on its own thread, so a busy UI can never get it removed by Windows) catches
-F19–F24. Keys with an action are swallowed, and unset keys pass through so games or OBS can use them.
+A Windows app for the cheap 6-key, 1-knob CH57x macropad (USB `1189:8840`). Each key runs an action and
+shows a small popup that never steals focus, so it works on top of games.
 
-## Actions
+## Features
+
+- **Reprograms the pad itself** over HID, so no vendor software or extra driver is needed
+- **8 action types**: open apps, key combos, typed text, mic mute, audio device switching, per-app mute,
+  OBS control, and a one-press "reset" for your desktop
+- **OBS integration** over obs-websocket v5: save replays, toggle recording and streaming
+- **On/off switches** that check whether a tool is running and need a second press to confirm
+- **Hold actions**: a second action on each key when held for ~0.6 s
+- **Game-aware**: warns when a fullscreen game starts while a GPU-heavy tool is still running
+- **Window rules**: put an app's window on a chosen monitor and half every time it opens
+
+## Install
+
+1. Download or clone this repo and build it (see [Development](#development))
+2. Run `dist\PadDeck.exe` and click **Program pad…** once. The pad then sends F19–F24, and the knob
+   controls volume.
+
+## Usage
+
+1. Pick a key in the app and choose an action
+2. Press the key: the action runs and a popup confirms it
+3. Keys with no action pass through, so games and OBS can still use them
+
+<details>
+<summary><b>All actions</b></summary>
 
 | Action | What it does |
 |---|---|
-| **Open** | A file, app, folder, URL or script. The new window is brought to the front. Can be an **on/off switch**: give it a "running" check (`llama-server`, or `python in C:\some\folder`) and a stop script, and it needs two presses within 3 s either way: on runs the target, off runs the stop script. **GPU-heavy** switches won't start while OBS is live or recording. |
+| **Open** | A file, app, folder, URL or script, brought to the front. Can be an **on/off switch** with a "running" check and a stop script; **GPU-heavy** switches won't start while OBS is live or recording. |
 | **Keys** | A key combo or sequence, e.g. `Ctrl+Shift+M` or `Ctrl+C, Ctrl+V`. |
 | **Type text** | Types text (newlines become Enter). |
 | **Mic mute** | Toggles the default (or a chosen) microphone. |
-| **Sound switch** | Cycles the default playback (or recording) device through a list. Devices are found again by name or adapter if Windows gives them a new id. |
+| **Sound switch** | Cycles the default playback or recording device. Devices are found again by name if Windows gives them a new id. |
 | **App mute** | Mutes/unmutes one app's audio. |
-| **OBS** | Save replay / toggle recording / toggle streaming over obs-websocket v5 (port and password are read from OBS's own config). If the replay buffer is off, Save replay turns it on, or starts OBS in the tray. After a save, ClipTrimmer adds the clip's cover picture. |
-| **Reset** | Two presses within 3 s. Stops the local LLM and ComfyUI, asks every non-core window to close (like clicking X), restarts the core apps marked Restart (never OBS while it's live or recording; the replay buffer is stopped first so OBS doesn't sit on its exit prompt), and starts any core app that's missing. |
+| **OBS** | Save replay / toggle recording / toggle streaming. Reads the port and password from OBS's own config. Turns the replay buffer on if needed. |
+| **Reset** | Two presses. Stops GPU tools, politely closes non-core windows, restarts chosen core apps and starts any that are missing. Never touches OBS while it's live. |
 
-Any key can also have a **hold action** (hold ~0.6 s), e.g. open ClipTrimmer's clip list. A key with a hold action
-fires its normal action on release.
+</details>
 
-## Also
+<details>
+<summary><b>Command line</b></summary>
 
-- **Game warnings:** when a fullscreen game comes to the front, a popup warns once if a GPU-heavy tool is still
-  on or the OBS replay buffer is off, and says which key fixes it.
-- **Window placement:** rules that put an app's main window on a given monitor and half whenever it opens
-  (e.g. OBS → left monitor, left half).
-- **Popups:** bottom or top of a chosen monitor; optional hiding over fullscreen games (warnings and Reset
-  confirmations always show).
-- PadDeck starts from a fresh sign-in environment, so apps it launches don't inherit variables from whatever
-  started it.
-- Settings: `%APPDATA%\PadDeck\settings.json`. Each save keeps the previous file as `settings.json.bak`; a
-  damaged file is copied aside (`settings.broken-*.json`) and the backup is loaded.
-- Autostart: HKCU Run entry with `--tray`.
-
-## Building
-
-Needs the .NET 10 SDK (the app is framework-dependent on the .NET 10 Desktop Runtime).
-
-```powershell
-.\build.ps1          # → dist\PadDeck.exe   (quit PadDeck from the tray first)
-.\build.ps1 -Test    # also runs the self-tests (130)
-```
-
-## Command line
-
-| | |
+| Flag | What it does |
 |---|---|
-| `--tray` | start hidden in the tray |
-| `--selftest out.txt` | run the self-tests |
-| `--program out.txt` | program the pad (F19–F24, knob = volume) |
-| `--snapshot ui.png` | render the UI and popups to PNGs without showing a window |
-| `--reset-plan out.txt` | read-only: what a Reset would close and start |
-| `--obs-ping out.txt` | check the OBS connection (live / recording / replay buffer) |
-| `--apply-windows [out.txt]` | place open windows by the rules once |
-| `--env out.txt` | the environment PadDeck hands to apps it launches |
+| `--tray` | Start hidden in the tray |
+| `--selftest out.txt` | Run the self-tests |
+| `--program out.txt` | Program the pad (F19–F24, knob = volume) |
+| `--snapshot ui.png` | Render the UI and popups to PNG without showing a window |
+| `--reset-plan out.txt` | Read-only: what a Reset would close and start |
+| `--obs-ping out.txt` | Check the OBS connection |
+| `--apply-windows [out.txt]` | Place open windows by the rules once |
+| `--env out.txt` | The environment PadDeck hands to apps it launches |
 
-## Layout
+</details>
+
+## How it works
+
+The pad is programmed through its vendor HID interface (`MI_00`, output report 3), using the protocol from
+[kriomant/ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool). The layout is stored on
+the pad. A low-level keyboard hook on its own thread catches F19–F24, so a busy UI can never get it removed
+by Windows.
+
+<details>
+<summary><b>More details</b></summary>
+
+- Apps are launched from a fresh sign-in environment, so they don't inherit variables from whatever started
+  PadDeck.
+- Settings live in `%APPDATA%\PadDeck\settings.json`. Each save keeps a `.bak`; a damaged file is set aside
+  and the backup is loaded.
+- Popups sit at the top or bottom of a chosen monitor and can hide over fullscreen games (warnings and
+  Reset confirmations always show).
+- Autostart is an HKCU Run entry with `--tray`.
 
 ```
-src\Program.cs            entry point, command line, single instance, clean environment
+src\Program.cs            entry point, command line, single instance
 src\AppSettings.cs        settings model + safe load/save
 src\Core\KeyHook.cs       F19–F24 hook on its own thread
 src\Core\Actions.cs       running actions, hold action
@@ -76,10 +98,25 @@ src\Core\Toggle.cs        on/off switches
 src\Core\Obs.cs           obs-websocket v5 client
 src\Core\Reset.cs         Reset
 src\Core\GameWatch.cs     fullscreen game detection + warnings
-src\Core\AudioCtl.cs      mic mute, device switching, app mute (NAudio + IPolicyConfig)
+src\Core\AudioCtl.cs      mic mute, device switching, app mute
 src\Core\WindowPlacer.cs  window rules
-src\Core\Foreground.cs    focus a newly launched window
 src\Core\Pad.cs           pad programming over HID
 src\Ui\                   main window, popup, icons, theme
 src\Tests.cs              self-tests
+keycaps\                  printable keycap label generator
 ```
+
+</details>
+
+## Development
+
+Needs the .NET 10 SDK.
+
+```powershell
+.\build.ps1          # → dist\PadDeck.exe   (quit PadDeck from the tray first)
+.\build.ps1 -Test    # also runs the self-tests (130)
+```
+
+## License
+
+[MIT](LICENSE) © Felix Wang
